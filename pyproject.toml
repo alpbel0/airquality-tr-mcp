@@ -1,18 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "airquality-tr-mcp"
 version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
+    "fastmcp>=3.4.4",
     "httpx>=0.28.1",
     "pydantic>=2.13.4",
+    "tzdata>=2026.3 ; sys_platform == 'win32'",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airquality_tr_mcp"]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+asyncio_mode = "auto"

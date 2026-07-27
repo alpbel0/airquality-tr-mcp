@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "airquality-tr-mcp": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory",
+        "C:\\Users\\yigit\\Desktop\\MCP\\airquality-tr-mcp",
+        "run",
+        "python",
+        "-m",
+        "airquality_tr_mcp.server"
+      ],
+      "env": {}
+    }
+  }
+}
