@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Personal working docs (per AGENTS.md convention — not part of the committed repo)
+docs/
+AGENTS.md
+REQUIREMENTS.md
+ROADMAP.md
+.maestro/
+.obsidian/

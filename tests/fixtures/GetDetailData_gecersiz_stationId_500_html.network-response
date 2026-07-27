@@ -1,0 +1,22 @@
+STATUS: 500
+NOTE: Body is NOT JSON — it's a full HTML page (the site's own error/shell page), Content-Type is text/html.
+Request that produced this: POST /Services/GetDetailData, body: stationId=00000000-0000-0000-0000-000000000000
+Body length: 18323 chars. First 1000 chars below (full HTML, truncated for the fixture):
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="">
+    <meta name="author" content="">
+    <title>SİM (Sürekli İzleme Merkezi) | T.C. Çevre, Şehircilik ve İklim Değişikliği Bakanlığı</title>
+    <link rel="shortcut icon" type="image/png" href="/Content/Custom/img/cevre_favicon.ico?v=zxck45lhas" />
+    <link href="/Content/Themes/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/Content/Themes/css/animate.css" rel="stylesheet">
+    <link href="/Content/Themes/font-awesome/css/font-awesome.min.css" rel="stylesheet">
+    <link href="/Content/Themes/css/plugins/toastr/toastr.min.css" rel="stylesheet" />
+    <link href="/Content/Themes/css/style.css?v=zxck45lhas" rel="stylesheet">
+    <link href="/Content/Plugins/Loading/css/jquery.loadingModal.min.css" rel="stylesheet" />
+    ... (devamı kesildi — asıl amaç: response'un JSON DEĞİL, HTML olduğunu ve status'un 500 olduğunu belgelemek)
