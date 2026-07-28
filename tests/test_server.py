@@ -11,8 +11,7 @@ from airquality_tr_mcp.cache import CachedProvider
 from airquality_tr_mcp.geocoding import (
     CachedGeocoder,
     GeocodedPlace,
-    MissingApiKeyError,
-    PeliasGeocoder,
+    GeocodingServiceError,
 )
 from airquality_tr_mcp.models import StationReading
 from airquality_tr_mcp.parsing import parse_bulk_stations
@@ -139,7 +138,7 @@ async def test_nearest_tool_text_mode_uses_resolved_place(
             label="Çözümlenen Yer",
             latitude=target.coordinate.lat,
             longitude=target.coordinate.lon,
-            match_type="exact",
+            importance=0.6,
         )
     )
     monkeypatch.setattr(server, "provider", _FakeProvider(stations))
@@ -154,6 +153,31 @@ async def test_nearest_tool_text_mode_uses_resolved_place(
     assert result.data["cozumlenen_konum"]["etiket"] == "Çözümlenen Yer"
 
 
+async def test_nearest_tool_corrects_bare_province_typo_before_geocoding(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    target = stations[0]
+    fake = _FakeGeocoder(
+        GeocodedPlace(
+            label="Manisa, Türkiye",
+            latitude=target.coordinate.lat,
+            longitude=target.coordinate.lon,
+            importance=0.6,
+        )
+    )
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+    monkeypatch.setattr(server, "geocoder", fake)
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_nearest_air_quality", {"location": "amnisa"}
+        )
+
+    assert fake.queries == ["Manisa"]
+    assert result.data["girdi"]["duzeltilmis_sorgu"] == "Manisa"
+
+
 async def test_nearest_tool_returns_geocoding_error_without_fetching_uhkia(
     monkeypatch,
 ):
@@ -161,7 +185,7 @@ async def test_nearest_tool_returns_geocoding_error_without_fetching_uhkia(
         async def fetch_all_stations(self):
             raise AssertionError("UHKİA must not be called")
 
-    fake = _FakeGeocoder(error=MissingApiKeyError("missing"))
+    fake = _FakeGeocoder(error=GeocodingServiceError("down"))
     monkeypatch.setattr(server, "provider", _MustNotRunProvider())
     monkeypatch.setattr(server, "geocoder", fake)
 
@@ -170,7 +194,7 @@ async def test_nearest_tool_returns_geocoding_error_without_fetching_uhkia(
             "get_nearest_air_quality", {"location": "Ankara"}
         )
 
-    assert result.data["hata"] == "api_anahtari_eksik"
+    assert result.data["hata"] == "geocoding_servis_hatasi"
 
 
 @pytest.mark.parametrize(
@@ -225,14 +249,15 @@ async def test_server_lifespan_closes_provider_and_geocoder(monkeypatch):
     assert closable_geocoder.closed
 
 
-async def test_missing_key_does_not_break_existing_tools(
+async def test_geocoder_failure_does_not_break_other_tools(
     load_fixture_text, monkeypatch
 ):
     stations = _load_all_stations(load_fixture_text)
-    monkeypatch.delenv("ORS_API_KEY", raising=False)
     monkeypatch.setattr(server, "provider", _FakeProvider(stations))
     monkeypatch.setattr(
-        server, "geocoder", CachedGeocoder(PeliasGeocoder(api_key=""))
+        server,
+        "geocoder",
+        CachedGeocoder(_FakeGeocoder(error=GeocodingServiceError("down"))),
     )
 
     async with Client(server.mcp) as client:
@@ -315,6 +340,31 @@ async def test_list_stations_filters_by_province(
         for station in result.data["istasyonlar"]
     )
     assert result.data["istasyonlar"][0]["olcum_zamani"]
+
+
+async def test_list_stations_narrows_to_district_when_province_is_a_district_name(
+    load_fixture_text, monkeypatch
+):
+    # Regression: "Çankaya"/"Kadıköy" etc. get auto-detected as a
+    # district of their province (note says so), but the result used to
+    # silently return every station in the whole province instead of
+    # just that district's stations.
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "list_stations", {"province": "Kadıköy"}
+        )
+
+    assert result.data["il"] == "İstanbul"
+    assert result.data["ilce"] == "Kadıköy"
+    assert result.data["istasyonlar"]
+    assert all(
+        station["ilce"] == "Kadıköy"
+        for station in result.data["istasyonlar"]
+    )
+    assert len(result.data["istasyonlar"]) < 37
 
 
 async def test_list_stations_returns_error_payload_for_unknown_province(
@@ -1412,6 +1462,36 @@ async def test_get_health_advisory_returns_advisory_for_worst_station(
     assert "temsili_hki" in result.data
     assert "temsili_kategori" in result.data
     assert result.data["tavsiye"]
+
+
+async def test_get_health_advisory_narrows_to_district_when_province_is_a_district_name(
+    load_fixture_text, monkeypatch
+):
+    # Regression: same bug as list_stations - the note claimed the
+    # district was detected but temsili_hki used to be computed from
+    # every station in the whole province, not just that district.
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    district_stations = [
+        s
+        for s in stations
+        if s.city == "İstanbul"
+        and s.district == "Kadıköy"
+        and s.current.aqi_index is not None
+    ]
+    expected_worst = max(
+        district_stations, key=lambda s: s.current.aqi_index
+    )
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_health_advisory", {"province": "Kadıköy"}
+        )
+
+    assert result.data["il"] == "İstanbul"
+    assert result.data["ilce"] == "Kadıköy"
+    assert result.data["temsili_hki"] == expected_worst.current.aqi_index
 
 
 async def test_get_health_advisory_returns_error_for_unknown_province(

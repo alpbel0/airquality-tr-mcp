@@ -6,14 +6,12 @@ from .aggregation import AqiSummary
 from .categories import category_for_status
 from .geocoding import (
     AmbiguousLocationError,
-    GeocodingAuthError,
     GeocodingError,
     GeocodingRateLimitError,
     GeocodingResponseError,
     GeocodingServiceError,
     GeocodingTimeoutError,
     LocationNotFoundError,
-    MissingApiKeyError,
 )
 from .historical import DailySummary, InvalidDaysError, TrendResult
 from .models import ISTANBUL_TZ, POLLUTANT_UNIT, Station
@@ -198,6 +196,7 @@ def resolution_error_payload(
         candidates_text = ", ".join(exc.candidates)
         return {
             "hata": "belirsiz_eslesme",
+            "parametre": parameter_name,
             "girdi": exc.query,
             "adaylar": exc.candidates,
             "mesaj": (
@@ -220,6 +219,7 @@ def resolution_error_payload(
     )
     return {
         "hata": "eslesme_bulunamadi",
+        "parametre": parameter_name,
         "girdi": exc.query,
         "oneriler": exc.suggestions,
         "mesaj": f"'{exc.query}' bulunamadı.{suggestions_text}{place_caveat}",
@@ -551,8 +551,8 @@ def nearest_air_quality_payload(
         "aciklama": _nearest_air_quality_aciklama(selection),
         "kaynaklar": {
             "konum": (
-                "HeiGIT/Pelias"
-                if location_payload["konum_kaynagi"] == "heigit_pelias"
+                "Nominatim/OpenStreetMap"
+                if location_payload["konum_kaynagi"] == "nominatim_osm"
                 else "Kullanıcı koordinatı"
             ),
             "hava_kalitesi": "UHKİA",
@@ -578,29 +578,6 @@ def invalid_nearest_input_payload(
 
 
 def geocoding_error_payload(exc: GeocodingError) -> dict:
-    if isinstance(exc, MissingApiKeyError):
-        return {
-            "hata": "api_anahtari_eksik",
-            "mesaj": (
-                "Metinle konum aramak için kişisel bir HeiGIT API "
-                "anahtarı gereklidir."
-            ),
-            "ortam_degiskeni": "ORS_API_KEY",
-            "cozum_adimlari": [
-                "https://account.heigit.org/ adresinde hesap oluşturun.",
-                "Bir API anahtarı oluşturup MCP yapılandırmasının env "
-                "alanına ORS_API_KEY olarak ekleyin.",
-                "MCP istemcisini tamamen yeniden başlatın.",
-            ],
-            "guvenlik_uyarisi": (
-                "API anahtarınızı sohbete, kaynak koduna veya GitHub'a "
-                "eklemeyin."
-            ),
-            "alternatif": (
-                "latitude ve longitude parametreleriyle API anahtarı "
-                "olmadan kullanabilirsiniz."
-            ),
-        }
     if isinstance(exc, AmbiguousLocationError):
         return {
             "hata": "belirsiz_konum",
@@ -610,7 +587,7 @@ def geocoding_error_payload(exc: GeocodingError) -> dict:
                     "etiket": item.label,
                     "lat": item.latitude,
                     "lon": item.longitude,
-                    "eslesme_tipi": item.match_type,
+                    "onem_skoru": item.importance,
                 }
                 for item in exc.candidates[:3]
             ],
@@ -624,13 +601,9 @@ def geocoding_error_payload(exc: GeocodingError) -> dict:
             "konum_bulunamadi",
             "Girilen konum Türkiye içinde eşleştirilemedi.",
         ),
-        GeocodingAuthError: (
-            "geocoding_yetkilendirme_hatasi",
-            "HeiGIT API anahtarı kabul edilmedi.",
-        ),
         GeocodingRateLimitError: (
             "geocoding_kota_asildi",
-            "HeiGIT API kullanım sınırı aşıldı; daha sonra tekrar deneyin.",
+            "Nominatim kullanım sınırı aşıldı; daha sonra tekrar deneyin.",
         ),
         GeocodingTimeoutError: (
             "geocoding_zaman_asimi",

@@ -59,9 +59,14 @@ def _ratio_scorer(query: str, candidate: str) -> float:
     return SequenceMatcher(None, query, candidate).ratio()
 
 
-def partial_ratio_scorer(query: str, candidate: str) -> float:
-    """Score the query against the candidate's best-matching substring."""
-    return fuzz.partial_ratio(query, candidate) / 100
+def weighted_ratio_scorer(query: str, candidate: str) -> float:
+    """Score using length-aware alignment: full-string ratio when lengths
+    are close, falling back to substring alignment for abbreviations or
+    inputs with extra trailing words (e.g. "Afyon" vs "Afyonkarahisar",
+    "İstanbul ili" vs "İstanbul"). Plain partial-ratio scoring is too
+    lenient for same-length inputs and matches unrelated words above the
+    threshold (e.g. "Fransa" vs "Manisa" scores 0.80)."""
+    return fuzz.WRatio(query, candidate) / 100
 
 
 def fuzzy_best_match(

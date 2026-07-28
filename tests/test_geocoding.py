@@ -7,115 +7,98 @@ from airquality_tr_mcp.geocoding import (
     AmbiguousLocationError,
     CachedGeocoder,
     GeocodedPlace,
-    GeocodingAuthError,
     GeocodingRateLimitError,
     GeocodingResponseError,
     GeocodingServiceError,
     GeocodingTimeoutError,
     LocationNotFoundError,
-    MissingApiKeyError,
-    PeliasGeocoder,
-    choose_pelias_candidate,
-    parse_pelias_candidates,
+    NominatimGeocoder,
+    choose_nominatim_candidate,
+    parse_nominatim_candidates,
 )
 
 
-def _feature(label, match_type, lon, lat, confidence=0.9):
+def _item(display_name, lat, lon, importance=0.5):
     return {
-        "type": "Feature",
-        "geometry": {"type": "Point", "coordinates": [lon, lat]},
-        "properties": {
-            "label": label,
-            "match_type": match_type,
-            "confidence": confidence,
-        },
+        "display_name": display_name,
+        "lat": str(lat),
+        "lon": str(lon),
+        "importance": importance,
     }
 
 
-def test_parser_preserves_geojson_lon_lat_order():
-    candidates = parse_pelias_candidates(
-        {
-            "type": "FeatureCollection",
-            "features": [
-                _feature("Göbeklitepe, Şanlıurfa", "exact", 38.9224, 37.2232)
-            ],
-        }
+def test_parser_converts_string_lat_lon_to_float():
+    candidates = parse_nominatim_candidates(
+        [_item("Göbeklitepe, Şanlıurfa", 37.2232, 38.9224)]
     )
 
-    assert candidates[0].longitude == 38.9224
     assert candidates[0].latitude == 37.2232
+    assert candidates[0].longitude == 38.9224
 
 
-def test_parser_ignores_optional_geojson_altitude():
-    feature = _feature(
-        "Göbeklitepe, Şanlıurfa", "exact", 38.9224, 37.2232
+def test_parser_keeps_importance_when_present():
+    candidates = parse_nominatim_candidates(
+        [_item("Ankara, Türkiye", 39.93, 32.85, importance=0.6)]
     )
-    feature["geometry"]["coordinates"].append(760.0)
 
-    candidates = parse_pelias_candidates({"features": [feature]})
-
-    assert candidates[0].longitude == 38.9224
-    assert candidates[0].latitude == 37.2232
+    assert candidates[0].importance == 0.6
 
 
-def test_parser_rejects_boolean_coordinates():
-    feature = _feature("Broken", "exact", True, 37.2232)
+def test_parser_defaults_importance_to_none_when_missing():
+    item = _item("Ankara, Türkiye", 39.93, 32.85)
+    del item["importance"]
+
+    candidates = parse_nominatim_candidates([item])
+
+    assert candidates[0].importance is None
+
+
+def test_parser_rejects_unparseable_coordinates():
+    item = _item("Broken", 0, 0)
+    item["lat"] = "not-a-number"
 
     with pytest.raises(GeocodingResponseError):
-        parse_pelias_candidates({"features": [feature]})
+        parse_nominatim_candidates([item])
 
 
-def test_lone_exact_candidate_is_accepted():
-    candidates = parse_pelias_candidates(
-        {
-            "features": [
-                _feature("Göbeklitepe, Şanlıurfa", "exact", 38.9224, 37.2232),
-                _feature("Şanlıurfa, Türkiye", "fallback", 38.79, 37.16),
-            ]
-        }
+def test_single_candidate_is_accepted():
+    candidates = parse_nominatim_candidates(
+        [_item("Ankara, Türkiye", 39.93, 32.85, importance=0.6)]
     )
 
-    selected = choose_pelias_candidate("Göbeklitepe", candidates)
+    selected = choose_nominatim_candidate("Ankara", candidates)
 
-    assert selected.label == "Göbeklitepe, Şanlıurfa"
+    assert selected.label == "Ankara, Türkiye"
 
 
-def test_two_distinct_non_fallback_candidates_are_ambiguous():
-    candidates = parse_pelias_candidates(
-        {
-            "features": [
-                _feature("Atatürk Mah., Ankara", "exact", 32.8, 39.9),
-                _feature("Atatürk Mah., İzmir", "exact", 27.2, 38.4),
-            ]
-        }
+def test_two_distinct_candidates_are_ambiguous():
+    candidates = parse_nominatim_candidates(
+        [
+            _item("Kadıköy, Türkiye", 40.98, 29.06),
+            _item("Kadıköy, Türkiye", 41.11, 29.90),
+        ]
     )
 
     with pytest.raises(AmbiguousLocationError) as caught:
-        choose_pelias_candidate("Atatürk Mahallesi", candidates)
+        choose_nominatim_candidate("Kadıköy", candidates)
 
     assert len(caught.value.candidates) == 2
 
 
 def test_duplicate_candidate_is_not_treated_as_ambiguity():
-    duplicate = _feature("Ankara, Türkiye", "exact", 32.85, 39.93)
-    candidates = parse_pelias_candidates({"features": [duplicate, duplicate]})
+    duplicate = _item("Ankara, Türkiye", 39.93, 32.85)
+    candidates = parse_nominatim_candidates([duplicate, duplicate])
 
-    selected = choose_pelias_candidate("Ankara", candidates)
+    selected = choose_nominatim_candidate("Ankara", candidates)
 
     assert selected.label == "Ankara, Türkiye"
 
 
-def test_fallback_only_result_is_not_accepted():
-    candidates = parse_pelias_candidates(
-        {
-            "features": [
-                _feature("Şanlıurfa, Türkiye", "fallback", 38.79, 37.16)
-            ]
-        }
-    )
-
+def test_empty_candidate_list_is_not_accepted():
     with pytest.raises(LocationNotFoundError):
-        choose_pelias_candidate("Olmayan Yer", candidates)
+        choose_nominatim_candidate(
+            "Olmayan Yer", parse_nominatim_candidates([])
+        )
 
 
 @pytest.mark.parametrize(
@@ -123,104 +106,84 @@ def test_fallback_only_result_is_not_accepted():
     [
         None,
         {},
-        {"features": "not-a-list"},
-        {
-            "features": [
-                {
-                    "geometry": {"coordinates": [32.85]},
-                    "properties": {"label": "Broken", "match_type": "exact"},
-                }
-            ]
-        },
+        "not-a-list",
+        [{"lat": "39.9", "lon": "32.8"}],
+        [{"display_name": "Broken", "lat": "not-a-number", "lon": "32.8"}],
     ],
 )
-def test_malformed_pelias_response_is_structured_failure(payload):
+def test_malformed_nominatim_response_is_structured_failure(payload):
     with pytest.raises(GeocodingResponseError):
-        parse_pelias_candidates(payload)
+        parse_nominatim_candidates(payload)
 
 
 def _client(handler):
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-async def test_client_sends_fixed_search_parameters_and_auth_header():
+async def test_client_sends_fixed_search_parameters_and_user_agent():
     captured = {}
 
     def handler(request):
         captured["request"] = request
         return httpx.Response(
             200,
-            json={
-                "features": [
-                    _feature("Göbeklitepe, Şanlıurfa", "exact", 38.9224, 37.2232)
-                ]
-            },
+            json=[_item("Göbeklitepe, Şanlıurfa", 37.2232, 38.9224)],
         )
 
-    geocoder = PeliasGeocoder(
-        api_key="secret-test-key", client=_client(handler)
-    )
+    geocoder = NominatimGeocoder(client=_client(handler))
     result = await geocoder.geocode("Göbeklitepe")
 
     assert result.label == "Göbeklitepe, Şanlıurfa"
     request = captured["request"]
     assert str(request.url).startswith(
-        "https://api.heigit.org/pelias/v1/search?"
+        "https://nominatim.openstreetmap.org/search?"
     )
-    assert request.url.params["text"] == "Göbeklitepe"
-    assert request.url.params["boundary.country"] == "TUR"
-    assert request.url.params["lang"] == "tr"
-    assert request.url.params["size"] == "3"
-    assert request.headers["Authorization"] == "secret-test-key"
-    assert "secret-test-key" not in str(request.url)
-
-
-async def test_missing_key_fails_before_http_call():
-    calls = 0
-
-    def handler(request):
-        nonlocal calls
-        calls += 1
-        return httpx.Response(500)
-
-    geocoder = PeliasGeocoder(api_key="", client=_client(handler))
-
-    with pytest.raises(MissingApiKeyError):
-        await geocoder.geocode("Ankara")
-
-    assert calls == 0
-
-
-@pytest.mark.parametrize("status", [401, 403])
-async def test_auth_statuses_map_to_auth_error(status):
-    geocoder = PeliasGeocoder(
-        api_key="test",
-        client=_client(lambda request: httpx.Response(status)),
-    )
-    with pytest.raises(GeocodingAuthError):
-        await geocoder.geocode("Ankara")
+    assert request.url.params["q"] == "Göbeklitepe"
+    assert request.url.params["countrycodes"] == "tr"
+    assert request.url.params["format"] == "jsonv2"
+    assert request.url.params["limit"] == "3"
+    assert "airquality-tr-mcp" in request.headers["User-Agent"]
 
 
 async def test_429_maps_to_rate_limit_error():
-    geocoder = PeliasGeocoder(
-        api_key="test",
+    geocoder = NominatimGeocoder(
         client=_client(lambda request: httpx.Response(429)),
     )
     with pytest.raises(GeocodingRateLimitError):
         await geocoder.geocode("Ankara")
 
 
-async def test_timeout_does_not_expose_key():
+async def test_unexpected_status_maps_to_service_error():
+    geocoder = NominatimGeocoder(
+        client=_client(lambda request: httpx.Response(500)),
+    )
+    with pytest.raises(GeocodingServiceError):
+        await geocoder.geocode("Ankara")
+
+
+async def test_timeout_maps_to_timeout_error():
     def handler(request):
         raise httpx.ReadTimeout("timeout", request=request)
 
-    geocoder = PeliasGeocoder(
-        api_key="do-not-leak", client=_client(handler)
-    )
-    with pytest.raises(GeocodingTimeoutError) as caught:
+    geocoder = NominatimGeocoder(client=_client(handler))
+    with pytest.raises(GeocodingTimeoutError):
         await geocoder.geocode("Ankara")
 
-    assert "do-not-leak" not in str(caught.value)
+
+async def test_client_throttles_to_one_request_per_second():
+    calls = []
+
+    def handler(request):
+        calls.append(asyncio.get_event_loop().time())
+        return httpx.Response(
+            200, json=[_item("Ankara, Türkiye", 39.93, 32.85)]
+        )
+
+    geocoder = NominatimGeocoder(client=_client(handler))
+    await geocoder.geocode("Ankara")
+    await geocoder.geocode("Ankara")
+
+    assert calls[1] - calls[0] >= 1.0
 
 
 class _Clock:
@@ -252,8 +215,7 @@ def _place(label="Ankara"):
         label=label,
         latitude=39.93,
         longitude=32.85,
-        match_type="exact",
-        confidence=0.9,
+        importance=0.6,
     )
 
 
@@ -287,8 +249,6 @@ async def test_no_result_is_negatively_cached_for_10_minutes():
 @pytest.mark.parametrize(
     "error",
     [
-        MissingApiKeyError("missing"),
-        GeocodingAuthError("auth"),
         GeocodingRateLimitError("quota"),
         GeocodingTimeoutError("timeout"),
         GeocodingServiceError("service"),

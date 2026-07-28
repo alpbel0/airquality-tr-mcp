@@ -22,7 +22,6 @@ from airquality_tr_mcp.aggregation import summarize_aqi
 from airquality_tr_mcp.geocoding import (
     AmbiguousLocationError,
     GeocodedPlace,
-    MissingApiKeyError,
 )
 from airquality_tr_mcp.responses import (
     air_quality_summary_payload,
@@ -59,16 +58,6 @@ def _load_station(load_fixture_text):
     return _load_all_stations(load_fixture_text)[0].model_copy(deep=True)
 
 
-def test_missing_api_key_payload_contains_safe_setup_steps():
-    payload = geocoding_error_payload(MissingApiKeyError("missing"))
-
-    assert payload["hata"] == "api_anahtari_eksik"
-    assert payload["ortam_degiskeni"] == "ORS_API_KEY"
-    assert "yeniden başlat" in " ".join(payload["cozum_adimlari"]).lower()
-    assert "latitude" in payload["alternatif"]
-    assert "sohbete" in payload["guvenlik_uyarisi"]
-
-
 def test_malformed_station_id_payload_explains_both_valid_input_forms():
     payload = malformed_station_id_payload("114b79f4")
 
@@ -85,7 +74,7 @@ def test_ambiguous_location_payload_lists_at_most_three_candidates():
             label=f"Aday {index}",
             latitude=39.0 + index,
             longitude=32.0 + index,
-            match_type="exact",
+            importance=0.5,
         )
         for index in range(4)
     )
@@ -116,8 +105,8 @@ def test_success_payload_states_reference_is_not_estimated(
             "etiket": "Ankara, Türkiye",
             "lat": 39.93,
             "lon": 32.85,
-            "eslesme_tipi": "exact",
-            "konum_kaynagi": "heigit_pelias",
+            "onem_skoru": 0.6,
+            "konum_kaynagi": "nominatim_osm",
         },
         selection=selection,
         max_distance_km=75.0,
@@ -310,6 +299,22 @@ def test_resolution_error_payload_for_ambiguous_match():
     assert payload["adaylar"] == ["Konya", "Zonguldak"]
     assert "Konya" in payload["mesaj"]
     assert "Zonguldak" in payload["mesaj"]
+
+
+def test_resolution_error_payload_no_match_exposes_parameter_name():
+    # Regression: compare_cities passes parameter_name="province1"/"province2"
+    # to disambiguate which field failed, but the NoMatchError branch used
+    # to silently ignore it - callers had no structured way to tell which
+    # of the two province parameters actually caused the failure.
+    exc = NoMatchError("xyzqwe", ["Rize", "Yenimahalle"])
+    payload = resolution_error_payload(exc, parameter_name="province2")
+    assert payload["parametre"] == "province2"
+
+
+def test_resolution_error_payload_ambiguous_exposes_parameter_name():
+    exc = AmbiguousMatchError("Ereğli", ["Konya", "Zonguldak"])
+    payload = resolution_error_payload(exc, parameter_name="province1")
+    assert payload["parametre"] == "province1"
 
 
 def test_station_breakdown_row_includes_category(load_fixture_text):

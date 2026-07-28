@@ -5,7 +5,7 @@ from airquality_tr_mcp.normalization import (
     NoMatchError,
     fuzzy_best_match,
     normalize_tr,
-    partial_ratio_scorer,
+    weighted_ratio_scorer,
 )
 
 
@@ -75,19 +75,32 @@ def test_fuzzy_best_match_default_scorer_still_rejects_prefix_abbreviation():
     assert exc_info.value.query == normalize_tr("Afyon")
 
 
-def test_fuzzy_best_match_partial_scorer_accepts_prefix_abbreviation():
+def test_fuzzy_best_match_weighted_scorer_accepts_prefix_abbreviation():
     match = fuzzy_best_match(
         normalize_tr("Afyon"),
         ["Afyonkarahisar", "Ankara"],
-        scorer=partial_ratio_scorer,
+        scorer=weighted_ratio_scorer,
     )
     assert match.value == "Afyonkarahisar"
 
 
-def test_fuzzy_best_match_partial_scorer_accepts_suffix_abbreviation():
+def test_fuzzy_best_match_weighted_scorer_accepts_suffix_abbreviation():
     match = fuzzy_best_match(
         normalize_tr("Urfa"),
         ["Şanlıurfa", "Bursa", "Uşak"],
-        scorer=partial_ratio_scorer,
+        scorer=weighted_ratio_scorer,
     )
     assert match.value == "Şanlıurfa"
+
+
+def test_fuzzy_best_match_weighted_scorer_rejects_unrelated_word():
+    # Regression: fuzz.partial_ratio scored "Fransa" vs "Manisa" at
+    # exactly 0.80 (the threshold), silently resolving an unrelated word
+    # to a province. WRatio scores same-length unrelated words lower
+    # while still accepting genuine abbreviations/typos.
+    with pytest.raises(NoMatchError):
+        fuzzy_best_match(
+            normalize_tr("Fransa"),
+            ["Manisa", "Antalya", "Konya"],
+            scorer=weighted_ratio_scorer,
+        )

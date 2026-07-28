@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Protocol
 
 import httpx
 
 from .normalization import normalize_tr
 
-MatchType = Literal["exact", "interpolated", "fallback"]
-PELIAS_SEARCH_URL = "https://api.heigit.org/pelias/v1/search"
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_USER_AGENT = (
+    "airquality-tr-mcp/0.1 "
+    "(https://github.com/alpbel0/airquality-tr-mcp)"
+)
+MIN_REQUEST_INTERVAL_SECONDS = 1.0
 SUCCESS_TTL_SECONDS = 86400.0
 NEGATIVE_TTL_SECONDS = 600.0
 MAX_GEOCODING_CACHE_ENTRIES = 256
@@ -25,19 +28,10 @@ class GeocodedPlace:
     label: str
     latitude: float
     longitude: float
-    match_type: MatchType
-    confidence: float | None = None
+    importance: float | None = None
 
 
 class GeocodingError(Exception):
-    pass
-
-
-class MissingApiKeyError(GeocodingError):
-    pass
-
-
-class GeocodingAuthError(GeocodingError):
     pass
 
 
@@ -76,46 +70,36 @@ class Geocoder(Protocol):
     async def geocode(self, query: str) -> GeocodedPlace: ...
 
 
-def parse_pelias_candidates(
+def parse_nominatim_candidates(
     payload: object,
 ) -> tuple[GeocodedPlace, ...]:
-    if not isinstance(payload, dict) or not isinstance(
-        payload.get("features"), list
-    ):
+    if not isinstance(payload, list):
         raise GeocodingResponseError(
-            "HeiGIT/Pelias geçersiz bir yanıt döndürdü."
+            "Nominatim geçersiz bir yanıt döndürdü."
         )
     candidates = []
-    for feature in payload["features"][:3]:
+    for item in payload[:3]:
         try:
-            properties = feature["properties"]
-            coordinates = feature["geometry"]["coordinates"]
-            label = properties["label"]
-            match_type = properties["match_type"]
-            longitude, latitude = coordinates[:2]
-            confidence = properties.get("confidence")
-            if (
-                not isinstance(label, str)
-                or match_type not in {"exact", "interpolated", "fallback"}
-                or isinstance(longitude, bool)
-                or not isinstance(longitude, (int, float))
-                or isinstance(latitude, bool)
-                or not isinstance(latitude, (int, float))
-            ):
+            if not isinstance(item, dict):
+                raise TypeError
+            label = item["display_name"]
+            latitude = float(item["lat"])
+            longitude = float(item["lon"])
+            importance = item.get("importance")
+            if not isinstance(label, str):
                 raise TypeError
         except (KeyError, TypeError, ValueError) as exc:
             raise GeocodingResponseError(
-                "HeiGIT/Pelias yanıtındaki konum verisi işlenemedi."
+                "Nominatim yanıtındaki konum verisi işlenemedi."
             ) from exc
         candidates.append(
             GeocodedPlace(
                 label=label,
-                longitude=float(longitude),
-                latitude=float(latitude),
-                match_type=match_type,
-                confidence=(
-                    float(confidence)
-                    if isinstance(confidence, (int, float))
+                latitude=latitude,
+                longitude=longitude,
+                importance=(
+                    float(importance)
+                    if isinstance(importance, (int, float))
                     else None
                 ),
             )
@@ -123,15 +107,13 @@ def parse_pelias_candidates(
     return tuple(candidates)
 
 
-def choose_pelias_candidate(
+def choose_nominatim_candidate(
     query: str, candidates: tuple[GeocodedPlace, ...]
 ) -> GeocodedPlace:
-    if not candidates or candidates[0].match_type == "fallback":
+    if not candidates:
         raise LocationNotFoundError(query)
     distinct: dict[tuple[str, float, float], GeocodedPlace] = {}
     for candidate in candidates:
-        if candidate.match_type == "fallback":
-            continue
         key = (
             normalize_tr(candidate.label),
             round(candidate.latitude, 6),
@@ -146,25 +128,20 @@ def choose_pelias_candidate(
     return usable[0]
 
 
-class PeliasGeocoder:
+class NominatimGeocoder:
+    """Free, keyless OSM-based geocoder. The public Nominatim instance
+    requires clients to self-throttle to at most 1 request/second and to
+    send an identifying User-Agent - see
+    https://operations.osmfoundation.org/policies/nominatim/."""
+
     def __init__(
         self,
         *,
-        api_key: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._api_key = api_key
         self._client = client
-
-    def _resolved_api_key(self) -> str:
-        key = self._api_key
-        if key is None:
-            key = os.getenv("ORS_API_KEY")
-        if not key or not key.strip():
-            raise MissingApiKeyError(
-                "Metinle konum aramak için ORS_API_KEY gereklidir."
-            )
-        return key.strip()
+        self._throttle_lock = asyncio.Lock()
+        self._last_request_at: float = 0.0
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -173,49 +150,55 @@ class PeliasGeocoder:
             )
         return self._client
 
+    async def _throttle(self) -> None:
+        async with self._throttle_lock:
+            wait = MIN_REQUEST_INTERVAL_SECONDS - (
+                time.monotonic() - self._last_request_at
+            )
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_request_at = time.monotonic()
+
     async def geocode(self, query: str) -> GeocodedPlace:
-        key = self._resolved_api_key()
+        await self._throttle()
         try:
             response = await self._get_client().get(
-                PELIAS_SEARCH_URL,
+                NOMINATIM_SEARCH_URL,
                 params={
-                    "text": query.strip(),
-                    "boundary.country": "TUR",
-                    "lang": "tr",
-                    "size": 3,
+                    "q": query.strip(),
+                    "countrycodes": "tr",
+                    "format": "jsonv2",
+                    "limit": 3,
+                    "accept-language": "tr",
                 },
-                headers={"Authorization": key},
+                headers={"User-Agent": NOMINATIM_USER_AGENT},
             )
         except httpx.TimeoutException as exc:
             raise GeocodingTimeoutError(
-                "HeiGIT/Pelias isteği zaman aşımına uğradı."
+                "Nominatim isteği zaman aşımına uğradı."
             ) from exc
         except httpx.HTTPError as exc:
             raise GeocodingServiceError(
-                "HeiGIT/Pelias servisine bağlanılamadı."
+                "Nominatim servisine bağlanılamadı."
             ) from exc
 
-        if response.status_code in {401, 403}:
-            raise GeocodingAuthError(
-                "HeiGIT API anahtarı kabul edilmedi."
-            )
         if response.status_code == 429:
             raise GeocodingRateLimitError(
-                "HeiGIT API kullanım sınırı aşıldı."
+                "Nominatim kullanım sınırı aşıldı."
             )
         if response.status_code != 200:
             raise GeocodingServiceError(
-                "HeiGIT/Pelias beklenmeyen bir yanıt döndürdü "
+                "Nominatim beklenmeyen bir yanıt döndürdü "
                 f"(status={response.status_code})."
             )
         try:
             payload = response.json()
         except (json.JSONDecodeError, ValueError) as exc:
             raise GeocodingResponseError(
-                "HeiGIT/Pelias yanıtı JSON olarak işlenemedi."
+                "Nominatim yanıtı JSON olarak işlenemedi."
             ) from exc
-        candidates = parse_pelias_candidates(payload)
-        return choose_pelias_candidate(query, candidates)
+        candidates = parse_nominatim_candidates(payload)
+        return choose_nominatim_candidate(query, candidates)
 
     async def aclose(self) -> None:
         if self._client is not None:

@@ -17,10 +17,11 @@ uymak kullanıcının sorumluluğundadır.
   HKİ (Hava Kalitesi İndeksi), kategori ve baskın kirletici değerlerini
   **olduğu gibi** kullanır; kendi hesaplaması, ortalaması veya tahmini
   yapılmaz.
-- **Konum çözümleme (geocoding):** HeiGIT tarafından barındırılan Pelias
-  (`https://api.heigit.org/pelias/v1/search`) — yalnızca metinle verilen bir
-  konumu enlem/boyluma çevirmek için kullanılır, hava kalitesi verisi
-  sağlamaz. Koordinat girişi bu servisi hiç çağırmaz.
+- **Konum çözümleme (geocoding):** OpenStreetMap Nominatim
+  (`https://nominatim.openstreetmap.org/search`) — yalnızca metinle verilen
+  bir konumu enlem/boyluma çevirmek için kullanılır, hava kalitesi verisi
+  sağlamaz, API anahtarı gerektirmez. Koordinat girişi bu servisi hiç
+  çağırmaz.
 
 ## Gereksinimler
 
@@ -55,27 +56,6 @@ uv sync
   }
 }
 ```
-
-### Opsiyonel: metinle konum arama için API anahtarı
-
-`get_nearest_air_quality` tool'unun `location` parametresi (ör.
-`"Göbeklitepe, Şanlıurfa"`) HeiGIT/Pelias'a istek atar ve kişisel bir API
-anahtarı gerektirir. `latitude`/`longitude` ile kullanım bu anahtarı hiç
-gerektirmez ve diğer tüm tool'lar bu anahtar olmadan da tam çalışır.
-
-```json
-{
-  "env": {
-    "ORS_API_KEY": "YOUR_PERSONAL_KEY"
-  }
-}
-```
-
-**Anahtarınızı yalnızca yerel MCP yapılandırmasına ekleyin.** Sohbete
-yapıştırmayın, kaynak koduna gömmeyin, GitHub'a commit'lemeyin. Anahtarı
-`https://account.heigit.org/` üzerinden kendiniz oluşturursunuz.
-Yapılandırmayı değiştirdikten sonra MCP istemcisini (Claude Desktop vb.)
-**tamamen yeniden başlatmanız** gerekir.
 
 ## Tool'lar
 
@@ -117,8 +97,8 @@ get_nearest_air_quality(latitude=37.2232, longitude=38.9224)
 
 ## Gizlilik, atıf ve sınırlamalar
 
-- Metinle konum sorguları HeiGIT/Pelias'a gönderilir; koordinat girişi bu
-  aktarımı tamamen atlar.
+- Metinle konum sorguları OpenStreetMap Nominatim'e gönderilir; koordinat
+  girişi bu aktarımı tamamen atlar.
 - Hava kalitesi ölçümleri UHKİA'dan gelir.
 - Mesafe, yerel düz-hat (Haversine) hesabıdır — yol/rota mesafesi değildir.
 - `referans_hki` yerel bir tahmin, enterpolasyon veya ortalama değildir;
@@ -126,6 +106,9 @@ get_nearest_air_quality(latitude=37.2232, longitude=38.9224)
 - İki saatten eski bir ölçüm, açık bir uyarıyla birlikte yine de döndürülür.
 - Bu paket yerel bir stdio yazılımıdır; v1'de merkezi/barındırılan bir servis
   yoktur.
-- Kullanıcılar kendi HeiGIT API anahtarlarını `https://account.heigit.org/`
-  üzerinden edinir.
-- HeiGIT/Pelias ve UHKİA birbirinden bağımsız, ilişkisiz iki dış servistir.
+- `location` parametresi il/ilçe yazım hatalarını `get_air_quality` kadar
+  iyi tolere etmez (Nominatim serbest metin araması yapar, il/ilçe fuzzy
+  düzeltmesi yapmaz); sadece bir ilin/ilçenin genel hava kalitesi
+  soruluyorsa `get_air_quality`/`list_stations` tercih edilmelidir.
+- Nominatim/OpenStreetMap ve UHKİA birbirinden bağımsız, ilişkisiz iki dış
+  servistir.

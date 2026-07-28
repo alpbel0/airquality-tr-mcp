@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from importlib import resources
 
@@ -10,7 +11,7 @@ from .normalization import (
     NoMatchError,
     fuzzy_best_match,
     normalize_tr,
-    partial_ratio_scorer,
+    weighted_ratio_scorer,
 )
 
 MAX_DISTRICT_PROVINCES = 3
@@ -24,6 +25,34 @@ def load_provinces() -> list[str]:
         .read_text(encoding="utf-8")
     )
     return json.loads(raw)
+
+
+def correct_bare_province_typo(
+    text: str, provinces: list[str] | None = None
+) -> str:
+    """Best-effort local typo fix for a free-text geocoding query.
+
+    Free-text geocoders (Nominatim) do no fuzzy spell-correction, so a
+    bare province typo like "amnisa" returns zero results even though
+    "Manisa" clearly resolves via our own fuzzy matcher. Only applies
+    when the input is a single word/token: WRatio's length-aware
+    matching will happily find a province name as a substring of a
+    longer phrase (e.g. "bursa hürriyet" -> "Bursa",
+    "Göbeklitepe, Şanlıurfa" -> "Şanlıurfa"), silently discarding the
+    district/POI specificity a multi-word query was carrying. No
+    station data is needed here, so this never triggers a network
+    call."""
+    tokens = [token for token in re.split(r"[\s,]+", text.strip()) if token]
+    if len(tokens) != 1:
+        return text
+    canonical = provinces if provinces is not None else load_provinces()
+    try:
+        match = fuzzy_best_match(
+            normalize_tr(tokens[0]), canonical, scorer=weighted_ratio_scorer
+        )
+    except (NoMatchError, AmbiguousMatchError):
+        return text
+    return match.value
 
 
 @dataclass
@@ -62,7 +91,7 @@ def match_district(
         match = fuzzy_best_match(
             normalized_query,
             district_names,
-            scorer=partial_ratio_scorer,
+            scorer=weighted_ratio_scorer,
         )
     except (NoMatchError, AmbiguousMatchError):
         return None
@@ -114,6 +143,21 @@ def _resolve_via_district(
     return cities[0], matches[0].district
 
 
+def _fuzzy_district_pool(stations: list[Station]) -> dict[str, list[str]]:
+    """District name -> owning cities, excluding names too generic to
+    identify a single province (same threshold as the exact-match path)."""
+    district_to_cities: dict[str, set[str]] = {}
+    for station in stations:
+        district_to_cities.setdefault(station.district, set()).add(
+            station.city
+        )
+    return {
+        district: sorted(cities)
+        for district, cities in district_to_cities.items()
+        if len(cities) < MAX_DISTRICT_PROVINCES
+    }
+
+
 def resolve_province_input(
     province_input: str,
     district_input: str | None,
@@ -148,21 +192,43 @@ def resolve_province_input(
             note=note,
         )
 
+    district_pool = _fuzzy_district_pool(stations)
+    combined_candidates = list(canonical) + list(district_pool.keys())
+
     try:
         match = fuzzy_best_match(
-            normalized_query, canonical, scorer=partial_ratio_scorer
+            normalized_query,
+            combined_candidates,
+            scorer=weighted_ratio_scorer,
         )
     except NoMatchError as exc:
         raise NoMatchError(province_input, exc.suggestions) from exc
     except AmbiguousMatchError as exc:
         raise AmbiguousMatchError(province_input, exc.candidates) from exc
 
+    if match.value in canonical_by_normalized.values():
+        note = (
+            f"'{province_input}' bulunamadı, "
+            f"'{match.value}' için sonuçlar gösteriliyor."
+        )
+        return ProvinceResolution(
+            province=match.value,
+            district=district_input,
+            note=note,
+        )
+
+    owning_cities = district_pool[match.value]
+    if len(owning_cities) > 1:
+        raise AmbiguousMatchError(province_input, owning_cities)
+
+    city = owning_cities[0]
     note = (
-        f"'{province_input}' bulunamadı, "
-        f"'{match.value}' için sonuçlar gösteriliyor."
+        f"'{province_input}' bir ilçe olarak algılandı "
+        f"(yazım hatası '{match.value}' olarak düzeltildi), "
+        f"bağlı olduğu il: {city}."
     )
     return ProvinceResolution(
-        province=match.value,
-        district=district_input,
+        province=city,
+        district=district_input or match.value,
         note=note,
     )

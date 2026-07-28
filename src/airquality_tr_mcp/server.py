@@ -4,8 +4,11 @@ import logging
 import re
 import sys
 
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.lifespan import lifespan
+
+load_dotenv()
 
 from .advisories import advisory_for_status
 from .aggregation import summarize_aqi
@@ -19,7 +22,7 @@ from .geocoding import (
     CachedGeocoder,
     Geocoder,
     GeocodingError,
-    PeliasGeocoder,
+    NominatimGeocoder,
 )
 from .historical import (
     InvalidDaysError,
@@ -36,10 +39,12 @@ from .normalization import (
     NoMatchError,
     fuzzy_best_match,
     normalize_tr,
+    weighted_ratio_scorer,
 )
 from .provider import AirQualityProvider, UhkiaProvider, UpstreamError
 from .pollutants import POLLUTANT_FIELDS, resolve_pollutant
 from .provinces import (
+    correct_bare_province_typo,
     match_district,
     resolve_province_input,
     stations_in_province,
@@ -88,7 +93,7 @@ logging.basicConfig(
 )
 
 provider: AirQualityProvider = CachedProvider(UhkiaProvider())
-geocoder: Geocoder = CachedGeocoder(PeliasGeocoder())
+geocoder: Geocoder = CachedGeocoder(NominatimGeocoder())
 _detailed_ranking_cache = RankingCache()
 STATION_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -139,7 +144,12 @@ def ping() -> str:
 
 @mcp.tool
 async def list_stations(province: str | None = None) -> dict:
-    """List UHKİA stations, optionally restricted to one province."""
+    """List UHKİA stations, optionally restricted to one province.
+
+    province may also be a district name (e.g. "Kadıköy") - it is
+    auto-detected and the result is narrowed to that district's
+    stations, not the whole province.
+    """
     try:
         stations = await provider.fetch_all_stations()
     except UpstreamError as exc:
@@ -177,16 +187,32 @@ async def list_stations(province: str | None = None) -> dict:
             stale_warning,
         )
 
-    return _attach_staleness_warning(
-        {
-            "il": resolution.province,
-            "not": resolution.note,
-            "istasyonlar": [
-                station_summary(station) for station in matched
-            ],
-        },
-        stale_warning,
-    )
+    if resolution.district:
+        normalized_district = normalize_tr(resolution.district)
+        district_matched = [
+            station
+            for station in matched
+            if normalize_tr(station.district) == normalized_district
+        ]
+        if not district_matched:
+            return _attach_staleness_warning(
+                district_error_payload(
+                    resolution.province, resolution.district, matched
+                ),
+                stale_warning,
+            )
+        matched = district_matched
+
+    payload = {
+        "il": resolution.province,
+        "not": resolution.note,
+        "istasyonlar": [
+            station_summary(station) for station in matched
+        ],
+    }
+    if resolution.district:
+        payload["ilce"] = resolution.district
+    return _attach_staleness_warning(payload, stale_warning)
 
 
 @mcp.tool
@@ -293,9 +319,18 @@ async def get_nearest_air_quality(
 ) -> dict:
     """Konuma en yakın resmi UHKİA istasyonlarının güncel verisini döndürür.
 
-    location kullanımı ORS_API_KEY gerektirir ve metni HeiGIT/Pelias'a
-    gönderir. latitude/longitude kullanımı geocoder çağırmaz. referans_hki
-    tahmin veya ortalama değil, en yakın geçerli istasyonun resmi HKİ'sidir.
+    location kullanımı metni OpenStreetMap/Nominatim'e gönderir (API
+    anahtarı gerekmez). latitude/longitude kullanımı geocoder çağırmaz.
+    referans_hki tahmin veya ortalama değil, en yakın geçerli istasyonun
+    resmi HKİ'sidir.
+
+    Bu tool bir ADRES/NOKTA (sokak, mahalle, koordinat) için en yakın
+    istasyonu bulmaya yöneliktir. Sadece bir ilin veya ilçenin genel hava
+    kalitesi soruluyorsa (adres/nokta değil), bunun yerine get_air_quality
+    veya list_stations kullanılmalıdır — location parametresi il/ilçe
+    isimlerindeki yazım hatalarını get_air_quality kadar iyi tolere etmez
+    (Nominatim serbest metin araması yapar, il/ilçe fuzzy düzeltmesi
+    yapmaz).
 
     limit parametresi 'yakin_istasyonlar' (geçerli HKİ verisi olan) ve
     'verisi_olmayan_yakin_istasyonlar' (veri gelmeyen) listelerine AYRI
@@ -314,19 +349,23 @@ async def get_nearest_air_quality(
 
     if mode == "text":
         assert location is not None
+        original_query = location.strip()
+        query_text = correct_bare_province_typo(original_query)
         try:
-            place = await geocoder.geocode(location.strip())
+            place = await geocoder.geocode(query_text)
         except GeocodingError as exc:
             return geocoding_error_payload(exc)
         resolved_latitude = place.latitude
         resolved_longitude = place.longitude
         input_payload = {"location": location}
+        if query_text != original_query:
+            input_payload["duzeltilmis_sorgu"] = query_text
         location_payload = {
             "etiket": place.label,
             "lat": place.latitude,
             "lon": place.longitude,
-            "eslesme_tipi": place.match_type,
-            "konum_kaynagi": "heigit_pelias",
+            "onem_skoru": place.importance,
+            "konum_kaynagi": "nominatim_osm",
         }
     else:
         resolved_latitude = latitude
@@ -417,6 +456,7 @@ async def get_station_detail(station: str) -> dict:
         fuzzy = fuzzy_best_match(
             normalized_query,
             [candidate.name for candidate in stations],
+            scorer=weighted_ratio_scorer,
         )
     except NoMatchError as exc:
         return _attach_staleness_warning(
@@ -726,6 +766,11 @@ async def get_trend_summary(
 async def compare_cities(province1: str, province2: str) -> dict:
     """İki ilin hava kalitesi özetini yan yana karşılaştırır.
 
+    province1/province2 bir ilçe adı da olabilir (ör. "Kadıköy") - bu
+    durumda otomatik olarak bağlı olduğu ile yönlendirilir ve
+    karşılaştırma o ilçenin istasyonlarıyla sınırlı yapılır (sonuçtaki
+    "ilce" alanı ve "not" ile belirtilir), tüm il yerine.
+
     İstasyon bazlı döküm için get_air_quality kullanılmalıdır.
     """
     try:
@@ -931,7 +976,13 @@ async def get_detailed_ranking(mode: str, limit: int) -> dict:
 
 @mcp.tool
 async def get_health_advisory(province: str) -> dict:
-    """İlin temsili hava kalitesine göre kural tabanlı tavsiye döndürür."""
+    """İlin temsili hava kalitesine göre kural tabanlı tavsiye döndürür.
+
+    province bir ilçe adı da olabilir (ör. "Kadıköy") - bu durumda
+    otomatik olarak bağlı olduğu ile yönlendirilir ve tavsiye o ilçenin
+    istasyonlarıyla sınırlı hesaplanır (sonuçtaki "ilce" alanıyla
+    belirtilir), tüm il yerine.
+    """
     try:
         stations = await provider.fetch_all_stations()
     except UpstreamError as exc:
@@ -961,6 +1012,24 @@ async def get_health_advisory(province: str) -> dict:
             stale_warning,
         )
 
+    if resolution.district:
+        normalized_district = normalize_tr(resolution.district)
+        district_stations = [
+            station
+            for station in province_stations
+            if normalize_tr(station.district) == normalized_district
+        ]
+        if not district_stations:
+            return _attach_staleness_warning(
+                district_error_payload(
+                    resolution.province,
+                    resolution.district,
+                    province_stations,
+                ),
+                stale_warning,
+            )
+        province_stations = district_stations
+
     rated_stations = [
         station
         for station in province_stations
@@ -983,18 +1052,18 @@ async def get_health_advisory(province: str) -> dict:
     worst = max(
         rated_stations, key=lambda station: station.current.aqi_index
     )
-    return _attach_staleness_warning(
-        {
-            "il": resolution.province,
-            "not": resolution.note,
-            "temsili_hki": worst.current.aqi_index,
-            "temsili_kategori": category_for_status(
-                worst.current.aqi_status
-            ),
-            "tavsiye": advisory_for_status(worst.current.aqi_status),
-        },
-        stale_warning,
-    )
+    payload = {
+        "il": resolution.province,
+        "not": resolution.note,
+        "temsili_hki": worst.current.aqi_index,
+        "temsili_kategori": category_for_status(
+            worst.current.aqi_status
+        ),
+        "tavsiye": advisory_for_status(worst.current.aqi_status),
+    }
+    if resolution.district:
+        payload["ilce"] = resolution.district
+    return _attach_staleness_warning(payload, stale_warning)
 
 
 @mcp.tool
