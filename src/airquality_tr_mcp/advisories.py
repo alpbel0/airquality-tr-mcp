@@ -29,8 +29,7 @@ HEALTH_ADVISORIES: dict[int, str] = {
         "tutulmalı; hassas gruplar dışarı hiç çıkmamalı."
     ),
     99: (
-        "Şu an geçerli bir ölçüm bulunmadığından sağlık tavsiyesi "
-        "verilemiyor."
+        "Şu an geçerli bir ölçüm bulunmadığından sağlık tavsiyesi verilemiyor."
     ),
 }
 

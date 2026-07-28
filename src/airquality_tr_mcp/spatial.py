@@ -47,8 +47,15 @@ def validate_nearest_input(
     if has_text == has_any_coordinate:
         raise InvalidNearestInputError(
             "input",
-            {"location": location, "latitude": latitude, "longitude": longitude},
-            "location veya latitude/longitude çiftinden yalnızca biri verilmelidir.",
+            {
+                "location": location,
+                "latitude": latitude,
+                "longitude": longitude,
+            },
+            (
+                "location veya latitude/longitude çiftinden yalnızca biri "
+                "verilmelidir."
+            ),
         )
     if has_any_coordinate and not has_coordinates:
         raise InvalidNearestInputError(
@@ -60,7 +67,11 @@ def validate_nearest_input(
         raise InvalidNearestInputError(
             "location", location, "location boş olamaz."
         )
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 5:
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or not 1 <= limit <= 5
+    ):
         raise InvalidNearestInputError(
             "limit", limit, "limit 1 ile 5 arasında bir tam sayı olmalıdır."
         )
@@ -140,9 +151,7 @@ def select_nearest_stations(
     within_range = [
         item for item in ranked if item.distance_km <= max_distance_km
     ]
-    reference_limit = min(
-        max_distance_km, REFERENCE_DISTANCE_LIMIT_KM
-    )
+    reference_limit = min(max_distance_km, REFERENCE_DISTANCE_LIMIT_KM)
     reference = next(
         (
             item
@@ -158,9 +167,7 @@ def select_nearest_stations(
         if item.station.current.aqi_index is not None
     )[:limit]
     unrated = [
-        item
-        for item in within_range
-        if item.station.current.aqi_index is None
+        item for item in within_range if item.station.current.aqi_index is None
     ]
     closer_cutoff = (
         reference.distance_km if reference is not None else math.inf
@@ -169,11 +176,7 @@ def select_nearest_stations(
         item for item in unrated if item.distance_km < closer_cutoff
     )[:limit]
     nearest_outside = next(
-        (
-            item
-            for item in ranked
-            if item.distance_km > max_distance_km
-        ),
+        (item for item in ranked if item.distance_km > max_distance_km),
         None,
     )
     return NearestStationsResult(

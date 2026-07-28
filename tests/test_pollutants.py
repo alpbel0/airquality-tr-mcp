@@ -7,7 +7,12 @@ from airquality_tr_mcp.pollutants import (
 
 def test_pollutant_fields_covers_all_measured_pollutants():
     assert set(POLLUTANT_FIELDS) == {
-        "NO2", "SO2", "CO", "O3", "PM10", "PM25",
+        "NO2",
+        "SO2",
+        "CO",
+        "O3",
+        "PM10",
+        "PM25",
     }
 
 

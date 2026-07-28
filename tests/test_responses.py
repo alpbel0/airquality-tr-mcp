@@ -1,11 +1,16 @@
 from datetime import datetime, timedelta
 
+from airquality_tr_mcp.aggregation import summarize_aqi
+from airquality_tr_mcp.categories import category_for_status
+from airquality_tr_mcp.geocoding import (
+    AmbiguousLocationError,
+    GeocodedPlace,
+)
 from airquality_tr_mcp.historical import (
     DailySummary,
     InvalidDaysError,
     TrendResult,
 )
-from airquality_tr_mcp.categories import category_for_status
 from airquality_tr_mcp.models import ISTANBUL_TZ
 from airquality_tr_mcp.normalization import (
     AmbiguousMatchError,
@@ -17,11 +22,6 @@ from airquality_tr_mcp.ranking import (
     InvalidLimitError,
     InvalidModeError,
     ProvinceRank,
-)
-from airquality_tr_mcp.aggregation import summarize_aqi
-from airquality_tr_mcp.geocoding import (
-    AmbiguousLocationError,
-    GeocodedPlace,
 )
 from airquality_tr_mcp.responses import (
     air_quality_summary_payload,
@@ -123,9 +123,7 @@ def test_null_reference_reports_coverage_without_country_claim(
     load_fixture_text,
 ):
     station = _load_station(load_fixture_text)
-    station.current.measured_at = datetime(
-        2026, 7, 27, 10, tzinfo=ISTANBUL_TZ
-    )
+    station.current.measured_at = datetime(2026, 7, 27, 10, tzinfo=ISTANBUL_TZ)
     outside = StationDistance(station, 120.0)
     selection = NearestStationsResult(
         reference=None,
@@ -276,7 +274,7 @@ def test_resolution_error_payload_for_no_match_without_suggestions():
     assert "Zzzzz" in payload["mesaj"]
 
 
-def test_resolution_error_payload_for_no_match_notes_possible_unmonitored_place():
+def test_no_match_notes_possible_unmonitored_place():
     exc = NoMatchError("Datça", ["Adana", "Hatay", "Batman"])
     payload = resolution_error_payload(exc)
 
@@ -284,7 +282,7 @@ def test_resolution_error_payload_for_no_match_notes_possible_unmonitored_place(
     assert "aktif bir hava kalitesi istasyonu" in payload["mesaj"]
 
 
-def test_resolution_error_payload_for_no_match_station_entity_has_no_place_caveat():
+def test_station_no_match_has_no_place_caveat():
     exc = NoMatchError("Zzzzzzzzzzz", [])
     payload = resolution_error_payload(exc, entity_label="istasyon")
 
@@ -421,9 +419,7 @@ def test_station_summary_adds_age_warning_when_data_is_stale(
 
     payload = station_summary(station, now=now)
 
-    assert payload["veri_yasi_uyarisi"] == (
-        "veri 3 saat önce güncellenmiş"
-    )
+    assert payload["veri_yasi_uyarisi"] == ("veri 3 saat önce güncellenmiş")
 
 
 def test_station_summary_omits_age_warning_when_data_is_fresh(
@@ -449,9 +445,7 @@ def test_station_breakdown_row_adds_age_warning_when_stale(
 
     payload = station_breakdown_row(station, now=now)
 
-    assert payload["veri_yasi_uyarisi"] == (
-        "veri 5 saat önce güncellenmiş"
-    )
+    assert payload["veri_yasi_uyarisi"] == ("veri 5 saat önce güncellenmiş")
 
 
 def test_station_detail_payload_adds_age_warning_when_stale(
@@ -464,9 +458,7 @@ def test_station_detail_payload_adds_age_warning_when_stale(
 
     payload = station_detail_payload(station, now=now)
 
-    assert payload["veri_yasi_uyarisi"] == (
-        "veri 4 saat önce güncellenmiş"
-    )
+    assert payload["veri_yasi_uyarisi"] == ("veri 4 saat önce güncellenmiş")
 
 
 def test_station_ref_with_category_adds_age_warning_when_stale(
@@ -479,9 +471,7 @@ def test_station_ref_with_category_adds_age_warning_when_stale(
 
     payload = station_ref_with_category(station, now=now)
 
-    assert payload["veri_yasi_uyarisi"] == (
-        "veri 6 saat önce güncellenmiş"
-    )
+    assert payload["veri_yasi_uyarisi"] == ("veri 6 saat önce güncellenmiş")
 
 
 def test_station_ref_with_category_omits_age_warning_when_fresh(
@@ -509,9 +499,7 @@ def test_invalid_days_payload_shape_for_range():
 
 
 def test_invalid_days_payload_shape_for_discrete_allowed_values():
-    exc = InvalidDaysError(
-        4, minimum=3, maximum=6, allowed_values=(3, 6)
-    )
+    exc = InvalidDaysError(4, minimum=3, maximum=6, allowed_values=(3, 6))
 
     payload = invalid_days_payload(exc)
 
@@ -522,9 +510,7 @@ def test_invalid_days_payload_shape_for_discrete_allowed_values():
 
 
 def test_daily_summary_row_shape():
-    summary = DailySummary(
-        "2026-07-27", 10.0, 30.0, 20.0, "NO2"
-    )
+    summary = DailySummary("2026-07-27", 10.0, 30.0, 20.0, "NO2")
 
     row = daily_summary_row(summary)
 
@@ -539,16 +525,12 @@ def test_daily_summary_row_shape():
 
 def test_station_history_payload_shape(load_fixture_text):
     station = _load_all_stations(load_fixture_text)[0]
-    summaries = [
-        DailySummary("2026-07-27", 10.0, 30.0, 20.0, "NO2")
-    ]
+    summaries = [DailySummary("2026-07-27", 10.0, 30.0, 20.0, "NO2")]
 
     payload = station_history_payload(station, summaries)
 
     assert payload["ad"] == station.name
-    assert payload["gunluk_ozet"] == [
-        daily_summary_row(summaries[0])
-    ]
+    assert payload["gunluk_ozet"] == [daily_summary_row(summaries[0])]
 
 
 def test_trend_summary_payload_shape(load_fixture_text):
@@ -697,16 +679,14 @@ def test_compare_cities_payload_sentence_names_districts_not_shared_province(
         province="İstanbul",
         district="Kadıköy",
         note=(
-            "'Kadıköy' bir ilçe olarak algılandı, "
-            "bağlı olduğu il: İstanbul."
+            "'Kadıköy' bir ilçe olarak algılandı, bağlı olduğu il: İstanbul."
         ),
     )
     resolution2 = ProvinceResolution(
         province="İstanbul",
         district="Beşiktaş",
         note=(
-            "'Beşiktaş' bir ilçe olarak algılandı, "
-            "bağlı olduğu il: İstanbul."
+            "'Beşiktaş' bir ilçe olarak algılandı, bağlı olduğu il: İstanbul."
         ),
     )
 
@@ -745,25 +725,19 @@ def test_invalid_limit_payload_shape():
 
 def test_province_ranking_row_shape(load_fixture_text):
     station = _load_all_stations(load_fixture_text)[0]
-    rank = ProvinceRank(
-        province=station.city, representative_station=station
-    )
+    rank = ProvinceRank(province=station.city, representative_station=station)
 
     assert province_ranking_row(rank) == {
         "il": station.city,
         "temsili_hki": station.current.aqi_index,
-        "temsili_kategori": category_for_status(
-            station.current.aqi_status
-        ),
+        "temsili_kategori": category_for_status(station.current.aqi_status),
     }
 
 
 def test_station_ranking_row_shape(load_fixture_text):
     station = _load_all_stations(load_fixture_text)[0]
 
-    assert station_ranking_row(
-        station, now=station.current.measured_at
-    ) == {
+    assert station_ranking_row(station, now=station.current.measured_at) == {
         "il": station.city,
         "ilce": station.district,
         "ad": station.name,
@@ -834,9 +808,7 @@ def test_air_quality_summary_payload_adds_district_label(
 
 
 def test_air_quality_summary_payload_represents_empty_district():
-    payload = air_quality_summary_payload(
-        None, scope_label="Keçiören"
-    )
+    payload = air_quality_summary_payload(None, scope_label="Keçiören")
 
     assert payload == {
         "ilce": "Keçiören",
@@ -848,8 +820,7 @@ def test_air_quality_summary_payload_represents_empty_district():
         "en_kotu_istasyon": None,
         "en_iyi_istasyon": None,
         "uyari": (
-            "Bu kapsamdaki hiçbir istasyonda şu an geçerli "
-            "bir HKİ ölçümü yok."
+            "Bu kapsamdaki hiçbir istasyonda şu an geçerli bir HKİ ölçümü yok."
         ),
     }
 
@@ -859,14 +830,10 @@ def test_air_quality_summary_station_refs_keep_data_age_warning(
 ):
     station = _load_all_stations(load_fixture_text)[0].model_copy(deep=True)
     station.current.aqi_index = 42.0
-    station.current.measured_at = datetime(
-        2026, 7, 27, 8, tzinfo=ISTANBUL_TZ
-    )
+    station.current.measured_at = datetime(2026, 7, 27, 8, tzinfo=ISTANBUL_TZ)
     now = datetime(2026, 7, 27, 12, tzinfo=ISTANBUL_TZ)
 
-    payload = air_quality_summary_payload(
-        summarize_aqi([station]), now=now
-    )
+    payload = air_quality_summary_payload(summarize_aqi([station]), now=now)
 
     assert payload["en_kotu_istasyon"]["veri_yasi_uyarisi"]
     assert payload["en_iyi_istasyon"]["veri_yasi_uyarisi"]

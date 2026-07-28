@@ -59,9 +59,7 @@ class _FailingProvider:
     async def fetch_all_stations(self):
         from airquality_tr_mcp.provider import UpstreamError
 
-        raise UpstreamError(
-            "UHKİA sunucusuna bağlanılamadı (zaman aşımı)."
-        )
+        raise UpstreamError("UHKİA sunucusuna bağlanılamadı (zaman aşımı).")
 
 
 class _ClosableProvider(_FakeProvider):
@@ -214,9 +212,7 @@ async def test_nearest_tool_returns_geocoding_error_without_fetching_uhkia(
 )
 async def test_nearest_tool_rejects_invalid_arguments(arguments):
     async with Client(server.mcp) as client:
-        result = await client.call_tool(
-            "get_nearest_air_quality", arguments
-        )
+        result = await client.call_tool("get_nearest_air_quality", arguments)
     assert result.data["hata"] == "gecersiz_parametre"
 
 
@@ -336,13 +332,12 @@ async def test_list_stations_filters_by_province(
         )
     assert result.data["istasyonlar"]
     assert all(
-        station["il"] == "Batman"
-        for station in result.data["istasyonlar"]
+        station["il"] == "Batman" for station in result.data["istasyonlar"]
     )
     assert result.data["istasyonlar"][0]["olcum_zamani"]
 
 
-async def test_list_stations_narrows_to_district_when_province_is_a_district_name(
+async def test_list_stations_narrows_district_input(
     load_fixture_text, monkeypatch
 ):
     # Regression: "Çankaya"/"Kadıköy" etc. get auto-detected as a
@@ -361,8 +356,7 @@ async def test_list_stations_narrows_to_district_when_province_is_a_district_nam
     assert result.data["ilce"] == "Kadıköy"
     assert result.data["istasyonlar"]
     assert all(
-        station["ilce"] == "Kadıköy"
-        for station in result.data["istasyonlar"]
+        station["ilce"] == "Kadıköy" for station in result.data["istasyonlar"]
     )
     assert len(result.data["istasyonlar"]) < 37
 
@@ -412,8 +406,7 @@ async def test_get_air_quality_returns_province_statistics_and_breakdown(
     batman_values = [
         station.current.aqi_index
         for station in stations
-        if station.city == "Batman"
-        and station.current.aqi_index is not None
+        if station.city == "Batman" and station.current.aqi_index is not None
     ]
 
     async with Client(server.mcp) as client:
@@ -567,9 +560,7 @@ async def test_get_air_quality_returns_empty_summary_for_ratedless_district(
     unrated.city = "Batman"
     unrated.district = "Merkez"
     unrated.current.aqi_index = None
-    monkeypatch.setattr(
-        server, "provider", _FakeProvider([rated, unrated])
-    )
+    monkeypatch.setattr(server, "provider", _FakeProvider([rated, unrated]))
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -731,9 +722,7 @@ async def test_get_station_detail_ambiguity_message_names_station_parameter(
     first.name = "Aydın"
     second = stations[1].model_copy(deep=True)
     second.name = "Adana"
-    monkeypatch.setattr(
-        server, "provider", _FakeProvider([first, second])
-    )
+    monkeypatch.setattr(server, "provider", _FakeProvider([first, second]))
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -789,7 +778,7 @@ async def test_list_stations_attaches_staleness_warning_after_upstream_failure(
     assert result.data["veri_bayat_uyarisi"]
 
 
-async def test_get_air_quality_attaches_staleness_warning_after_upstream_failure(
+async def test_air_quality_attaches_staleness_warning(
     load_fixture_text, monkeypatch
 ):
     stations = _load_all_stations(load_fixture_text)
@@ -812,7 +801,7 @@ async def test_get_air_quality_attaches_staleness_warning_after_upstream_failure
     assert result.data["veri_bayat_uyarisi"]
 
 
-async def test_get_station_detail_attaches_staleness_warning_after_upstream_failure(
+async def test_station_detail_attaches_staleness_warning(
     load_fixture_text, monkeypatch
 ):
     stations = _load_all_stations(load_fixture_text)
@@ -934,9 +923,7 @@ async def test_get_historical_data_returns_worst_station_when_no_district(
                 )
             ]
 
-    monkeypatch.setattr(
-        server, "provider", _FakeHistoryProvider(stations)
-    )
+    monkeypatch.setattr(server, "provider", _FakeHistoryProvider(stations))
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -978,15 +965,12 @@ async def test_get_historical_data_returns_district_matches(
                 )
             ]
 
-    monkeypatch.setattr(
-        server, "provider", _FakeHistoryProvider(stations)
-    )
+    monkeypatch.setattr(server, "provider", _FakeHistoryProvider(stations))
     expected_count = len(
         [
             station
             for station in stations
-            if station.city == "Batman"
-            and station.district == "Merkez"
+            if station.city == "Batman" and station.district == "Merkez"
         ]
     )
 
@@ -1022,7 +1006,7 @@ async def test_get_historical_data_returns_error_for_unmatched_district(
     assert result.data["hata"] == "ilce_eslesmedi"
 
 
-async def test_get_historical_data_returns_structured_error_on_upstream_failure(
+async def test_historical_data_returns_upstream_error(
     monkeypatch,
 ):
     monkeypatch.setattr(server, "provider", _FailingProvider())
@@ -1078,9 +1062,7 @@ async def test_get_trend_summary_defaults_to_three_days(
                 )
             ]
 
-    monkeypatch.setattr(
-        server, "provider", _FakeHistoryProvider(stations)
-    )
+    monkeypatch.setattr(server, "provider", _FakeHistoryProvider(stations))
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -1119,9 +1101,7 @@ async def test_get_trend_summary_accepts_six_days(
                 )
             ]
 
-    monkeypatch.setattr(
-        server, "provider", _FakeHistoryProvider(stations)
-    )
+    monkeypatch.setattr(server, "provider", _FakeHistoryProvider(stations))
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -1234,17 +1214,13 @@ async def test_compare_cities_filters_by_detected_district(
 
     assert result.data["il1"]["ilce"] == district_a
     assert result.data["il2"]["ilce"] == district_b
-    expected_count_a = len(
-        [s for s in istanbul if s.district == district_a]
-    )
-    expected_count_b = len(
-        [s for s in istanbul if s.district == district_b]
-    )
+    expected_count_a = len([s for s in istanbul if s.district == district_a])
+    expected_count_b = len([s for s in istanbul if s.district == district_b])
     assert result.data["il1"]["istasyon_sayisi"] == expected_count_a
     assert result.data["il2"]["istasyon_sayisi"] == expected_count_b
 
 
-async def test_compare_cities_no_longer_returns_identical_sides_for_different_districts(
+async def test_compare_cities_distinguishes_districts(
     load_fixture_text, monkeypatch
 ):
     stations = _load_all_stations(load_fixture_text)
@@ -1356,9 +1332,7 @@ async def test_get_detailed_ranking_worst_mode_orders_descending(
 ):
     stations = _load_all_stations(load_fixture_text)
     monkeypatch.setattr(server, "provider", _FakeProvider(stations))
-    monkeypatch.setattr(
-        server, "_detailed_ranking_cache", RankingCache()
-    )
+    monkeypatch.setattr(server, "_detailed_ranking_cache", RankingCache())
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -1377,9 +1351,7 @@ async def test_get_detailed_ranking_best_mode_orders_ascending(
 ):
     stations = _load_all_stations(load_fixture_text)
     monkeypatch.setattr(server, "provider", _FakeProvider(stations))
-    monkeypatch.setattr(
-        server, "_detailed_ranking_cache", RankingCache()
-    )
+    monkeypatch.setattr(server, "_detailed_ranking_cache", RankingCache())
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -1395,9 +1367,7 @@ async def test_get_detailed_ranking_rejects_invalid_mode(
 ):
     stations = _load_all_stations(load_fixture_text)
     monkeypatch.setattr(server, "provider", _FakeProvider(stations))
-    monkeypatch.setattr(
-        server, "_detailed_ranking_cache", RankingCache()
-    )
+    monkeypatch.setattr(server, "_detailed_ranking_cache", RankingCache())
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -1431,13 +1401,11 @@ async def test_get_detailed_ranking_serves_cached_result_within_ttl(
     assert first.data["siralama"] == second.data["siralama"]
 
 
-async def test_get_detailed_ranking_returns_structured_error_on_upstream_failure(
+async def test_detailed_ranking_returns_upstream_error(
     monkeypatch,
 ):
     monkeypatch.setattr(server, "provider", _FailingProvider())
-    monkeypatch.setattr(
-        server, "_detailed_ranking_cache", RankingCache()
-    )
+    monkeypatch.setattr(server, "_detailed_ranking_cache", RankingCache())
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -1464,7 +1432,7 @@ async def test_get_health_advisory_returns_advisory_for_worst_station(
     assert result.data["tavsiye"]
 
 
-async def test_get_health_advisory_narrows_to_district_when_province_is_a_district_name(
+async def test_health_advisory_narrows_district_input(
     load_fixture_text, monkeypatch
 ):
     # Regression: same bug as list_stations - the note claimed the
@@ -1480,9 +1448,7 @@ async def test_get_health_advisory_narrows_to_district_when_province_is_a_distri
         and s.district == "Kadıköy"
         and s.current.aqi_index is not None
     ]
-    expected_worst = max(
-        district_stations, key=lambda s: s.current.aqi_index
-    )
+    expected_worst = max(district_stations, key=lambda s: s.current.aqi_index)
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -1539,7 +1505,7 @@ async def test_get_health_advisory_returns_default_text_when_no_valid_hki(
     assert "verilemiyor" in result.data["tavsiye"]
 
 
-async def test_get_health_advisory_returns_structured_error_on_upstream_failure(
+async def test_health_advisory_returns_upstream_error(
     monkeypatch,
 ):
     monkeypatch.setattr(server, "provider", _FailingProvider())
@@ -1807,9 +1773,7 @@ async def test_get_historical_data_fuzzy_corrects_district_typo(
     load_fixture_text, monkeypatch
 ):
     stations = _load_all_stations(load_fixture_text)
-    monkeypatch.setattr(
-        server, "provider", _FakeHistoryProvider(stations)
-    )
+    monkeypatch.setattr(server, "provider", _FakeHistoryProvider(stations))
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(
@@ -1830,9 +1794,7 @@ async def test_get_trend_summary_fuzzy_corrects_district_typo(
     load_fixture_text, monkeypatch
 ):
     stations = _load_all_stations(load_fixture_text)
-    monkeypatch.setattr(
-        server, "provider", _FakeHistoryProvider(stations)
-    )
+    monkeypatch.setattr(server, "provider", _FakeHistoryProvider(stations))
 
     async with Client(server.mcp) as client:
         result = await client.call_tool(

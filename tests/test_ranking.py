@@ -39,9 +39,7 @@ def test_validate_ranking_args_accepts_valid_input():
 def test_rank_provinces_worst_mode_orders_descending(load_fixture_text):
     stations = _load_all_stations(load_fixture_text)
     ranked = rank_provinces(stations, "worst", 5)
-    values = [
-        rank.representative_station.current.aqi_index for rank in ranked
-    ]
+    values = [rank.representative_station.current.aqi_index for rank in ranked]
 
     assert values == sorted(values, reverse=True)
     assert len(ranked) == 5
@@ -50,9 +48,7 @@ def test_rank_provinces_worst_mode_orders_descending(load_fixture_text):
 def test_rank_provinces_best_mode_orders_ascending(load_fixture_text):
     stations = _load_all_stations(load_fixture_text)
     ranked = rank_provinces(stations, "best", 5)
-    values = [
-        rank.representative_station.current.aqi_index for rank in ranked
-    ]
+    values = [rank.representative_station.current.aqi_index for rank in ranked]
 
     assert values == sorted(values)
 
@@ -62,9 +58,7 @@ def test_rank_provinces_picks_worst_station_per_province(
 ):
     stations = _load_all_stations(load_fixture_text)
     ranked = rank_provinces(stations, "worst", 200)
-    batman_rank = next(
-        rank for rank in ranked if rank.province == "Batman"
-    )
+    batman_rank = next(rank for rank in ranked if rank.province == "Batman")
     batman_stations = [s for s in stations if s.city == "Batman"]
     expected = max(batman_stations, key=lambda s: s.current.aqi_index)
 
@@ -104,9 +98,7 @@ def test_rank_stations_excludes_unrated_stations(load_fixture_text):
     unrated.current.aqi_index = None
     ranked = rank_stations([unrated, *stations[1:]], "worst", 1000)
 
-    assert all(
-        station.current.aqi_index is not None for station in ranked
-    )
+    assert all(station.current.aqi_index is not None for station in ranked)
 
 
 def test_rank_stations_limit_larger_than_available_returns_all_rated(

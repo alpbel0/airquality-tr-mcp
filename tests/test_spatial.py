@@ -13,9 +13,7 @@ from airquality_tr_mcp.spatial import (
 
 def _stations(load_fixture_text):
     return parse_bulk_stations(
-        load_fixture_text(
-            "GetAirQualityStations_bulk_tum_ag.network-response"
-        )
+        load_fixture_text("GetAirQualityStations_bulk_tum_ag.network-response")
     )
 
 
@@ -24,9 +22,7 @@ def test_haversine_returns_zero_for_same_point():
 
 
 def test_haversine_uses_lat_lon_order():
-    distance = haversine_distance_km(
-        39.9334, 32.8597, 41.0082, 28.9784
-    )
+    distance = haversine_distance_km(39.9334, 32.8597, 41.0082, 28.9784)
     assert distance == pytest.approx(349.4, abs=2.0)
 
 
@@ -55,9 +51,7 @@ def test_haversine_uses_lat_lon_order():
         ),
     ],
 )
-def test_validate_nearest_input_accepts_exactly_one_mode(
-    kwargs, expected
-):
+def test_validate_nearest_input_accepts_exactly_one_mode(kwargs, expected):
     assert validate_nearest_input(**kwargs) == expected
 
 
@@ -181,9 +175,7 @@ def test_reference_search_is_independent_from_limit(load_fixture_text):
 
 def test_reference_never_uses_station_beyond_75_km(load_fixture_text):
     template = _stations(load_fixture_text)[0]
-    far = _station(
-        template, station_id="far", lon=33.0, lat=39.0, aqi=42.0
-    )
+    far = _station(template, station_id="far", lon=33.0, lat=39.0, aqi=42.0)
 
     result = select_nearest_stations(
         [far],

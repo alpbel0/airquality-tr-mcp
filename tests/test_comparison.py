@@ -64,8 +64,7 @@ def test_province_worst_pollutant_value_returns_max_non_null(
     station_b.current.pm10 = 55.0
 
     assert (
-        province_worst_pollutant_value("PM10", [station_a, station_b])
-        == 55.0
+        province_worst_pollutant_value("PM10", [station_a, station_b]) == 55.0
     )
 
 

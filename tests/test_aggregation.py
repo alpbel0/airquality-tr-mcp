@@ -1,14 +1,10 @@
-import pytest
-
 from airquality_tr_mcp.aggregation import summarize_aqi
 from airquality_tr_mcp.parsing import parse_bulk_stations
 
 
 def _templates(load_fixture_text):
     return parse_bulk_stations(
-        load_fixture_text(
-            "GetAirQualityStations_bulk_tum_ag.network-response"
-        )
+        load_fixture_text("GetAirQualityStations_bulk_tum_ag.network-response")
     )
 
 

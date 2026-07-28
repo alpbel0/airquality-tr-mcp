@@ -88,6 +88,41 @@ uv sync
   tek temsili değerle hızlı bir sıralama verir; `get_detailed_ranking` aynı
   veriyi il bazında özetlemeden, istasyon seviyesinde ülke geneli sıralar.
 
+### Örnek çağrılar
+
+```text
+ping()
+
+list_stations()
+list_stations(province="İstanbul")
+list_stations(province="Kadıköy")
+
+get_air_quality(province="Ankara")
+get_air_quality(province="İstanbul", district="Kadıköy")
+
+get_station_detail(station="Ankara - Çankaya")
+get_station_detail(station="a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
+get_historical_data(province="İzmir", days=7)
+get_historical_data(province="İstanbul", days=14, district="Kadıköy")
+
+get_trend_summary(province="Bursa", days=3)
+get_trend_summary(province="Bursa", days=6)
+
+compare_cities(province1="İstanbul", province2="Ankara")
+
+get_ranking(mode="worst", limit=10)
+get_ranking(mode="best", limit=5)
+
+get_detailed_ranking(mode="worst", limit=20)
+
+get_health_advisory(province="Kocaeli")
+
+check_alert(province="İstanbul", threshold=100)
+check_alert(province="Ankara", threshold=50, pollutant="PM10")
+check_alert(province="İzmir", threshold=40, pollutant="PM10", district="Konak")
+```
+
 ### `get_nearest_air_quality` örnekleri
 
 ```text

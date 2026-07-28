@@ -14,8 +14,7 @@ from .normalization import normalize_tr
 
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_USER_AGENT = (
-    "airquality-tr-mcp/0.1 "
-    "(https://github.com/alpbel0/airquality-tr-mcp)"
+    "airquality-tr-mcp/0.1 (https://github.com/alpbel0/airquality-tr-mcp)"
 )
 MIN_REQUEST_INTERVAL_SECONDS = 1.0
 SUCCESS_TTL_SECONDS = 86400.0
@@ -74,9 +73,7 @@ def parse_nominatim_candidates(
     payload: object,
 ) -> tuple[GeocodedPlace, ...]:
     if not isinstance(payload, list):
-        raise GeocodingResponseError(
-            "Nominatim geçersiz bir yanıt döndürdü."
-        )
+        raise GeocodingResponseError("Nominatim geçersiz bir yanıt döndürdü.")
     candidates = []
     for item in payload[:3]:
         try:
@@ -183,9 +180,7 @@ class NominatimGeocoder:
             ) from exc
 
         if response.status_code == 429:
-            raise GeocodingRateLimitError(
-                "Nominatim kullanım sınırı aşıldı."
-            )
+            raise GeocodingRateLimitError("Nominatim kullanım sınırı aşıldı.")
         if response.status_code != 200:
             raise GeocodingServiceError(
                 "Nominatim beklenmeyen bir yanıt döndürdü "

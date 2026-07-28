@@ -1,6 +1,11 @@
 from datetime import datetime, timedelta
 
-from airquality_tr_mcp.models import Coordinate, ISTANBUL_TZ, Station, StationReading
+from airquality_tr_mcp.models import (
+    ISTANBUL_TZ,
+    Coordinate,
+    Station,
+    StationReading,
+)
 
 
 def test_coordinate_from_wkt_parses_lon_before_lat():
@@ -12,17 +17,29 @@ def test_coordinate_from_wkt_parses_lon_before_lat():
 
 
 # Real values from the Ankara/Bahçelievler GetDetailData fixture, first record
-# (docs/api-notes.md / tests/fixtures/GetDetailData_ankara_bahcelievler_temiz.network-response)
+# Source: docs/api-notes.md and the Ankara/Bahçelievler detail fixture.
 ANKARA_FIRST_READING_RAW = {
     "StationId": "251a7ea1-e3ff-4b2f-a4d2-1231118f83fa",
     "Date": "2026-07-27T00:00:00",
-    "NO2": 37.939, "SO2": 7.006, "CO": 479.859, "O3": None,
-    "PM10": 9.766, "PM25": 5.004,
-    "CO_1": 629.829, "O3_1": None, "PM10_1": 14.868,
-    "SO2_N": 3.573, "NO2_N": 19.349, "CO_N": 4.45, "O3_N": None,
-    "PM10_N": 10.743, "PM25_N": -32768.0,
-    "AQIIndex": 19.349, "AQIStatus": 0,
-    "ContaminantParameter": "NO2", "AQIType": 0,
+    "NO2": 37.939,
+    "SO2": 7.006,
+    "CO": 479.859,
+    "O3": None,
+    "PM10": 9.766,
+    "PM25": 5.004,
+    "CO_1": 629.829,
+    "O3_1": None,
+    "PM10_1": 14.868,
+    "SO2_N": 3.573,
+    "NO2_N": 19.349,
+    "CO_N": 4.45,
+    "O3_N": None,
+    "PM10_N": 10.743,
+    "PM25_N": -32768.0,
+    "AQIIndex": 19.349,
+    "AQIStatus": 0,
+    "ContaminantParameter": "NO2",
+    "AQIType": 0,
 }
 
 
@@ -40,7 +57,7 @@ def test_station_reading_parses_pascal_case_aliases():
 
 def test_station_reading_ignores_unmodeled_N_fields():
     # _N fields are present in the raw payload but out of scope (see plan's
-    # Global Constraints) — StationReading must not fail or silently require them.
+    # Global Constraints) — StationReading must not fail or require them.
     reading = StationReading.model_validate(ANKARA_FIRST_READING_RAW)
     assert not hasattr(reading, "pm25_n")
     assert not hasattr(reading, "no2_n")
@@ -48,7 +65,9 @@ def test_station_reading_ignores_unmodeled_N_fields():
 
 def test_station_reading_attaches_istanbul_timezone():
     reading = StationReading.model_validate(ANKARA_FIRST_READING_RAW)
-    assert reading.measured_at == datetime(2026, 7, 27, 0, 0, tzinfo=ISTANBUL_TZ)
+    assert reading.measured_at == datetime(
+        2026, 7, 27, 0, 0, tzinfo=ISTANBUL_TZ
+    )
     assert reading.measured_at.utcoffset() == timedelta(hours=3)
 
 
@@ -60,10 +79,10 @@ def test_pollutant_unit_is_micrograms_per_cubic_meter():
     assert POLLUTANT_UNIT == "µg/m³"
 
 
-# Real (trimmed) record from GetAirQualityStations_bulk_tum_ag.network-response —
+# Real, trimmed record from the bulk stations network response —
 # the "Batman - 2" station, a real example of a station whose Config.parameters
-# lists a pollutant (NO2/SO2/CO/O3) that is nonetheless reporting null right now.
-# This is the concrete case ROADMAP §1.4 calls out as the "eksik ölçüm" example.
+# lists a pollutant (NO2/SO2/CO/O3) that is reporting null right now.
+# This is ROADMAP §1.4's concrete "eksik ölçüm" example.
 BATMAN2_STATION_RAW = {
     "id": "23ac6ffc-1067-4c8e-ad2d-2ba5da78b876",
     "Location": "POINT (41.108308 37.889110999999971)",
@@ -75,13 +94,25 @@ BATMAN2_STATION_RAW = {
     "Values": {
         "StationId": "23ac6ffc-1067-4c8e-ad2d-2ba5da78b876",
         "Date": "2026-07-27T00:00:00",
-        "NO2": None, "SO2": None, "CO": None, "O3": None,
-        "PM10": 62.196, "PM25": 21.186,
-        "CO_1": None, "O3_1": None, "PM10_1": None,
-        "SO2_N": None, "NO2_N": None, "CO_N": None, "O3_N": None,
-        "PM10_N": 55.244, "PM25_N": -32768.0,
-        "AQIIndex": 55.244, "AQIStatus": 1,
-        "ContaminantParameter": "PM10", "AQIType": 0,
+        "NO2": None,
+        "SO2": None,
+        "CO": None,
+        "O3": None,
+        "PM10": 62.196,
+        "PM25": 21.186,
+        "CO_1": None,
+        "O3_1": None,
+        "PM10_1": None,
+        "SO2_N": None,
+        "NO2_N": None,
+        "CO_N": None,
+        "O3_N": None,
+        "PM10_N": 55.244,
+        "PM25_N": -32768.0,
+        "AQIIndex": 55.244,
+        "AQIStatus": 1,
+        "ContaminantParameter": "PM10",
+        "AQIType": 0,
     },
     "Config": {"parameters": "NO2,O3,PM10,SO2,CO,PM25"},
 }

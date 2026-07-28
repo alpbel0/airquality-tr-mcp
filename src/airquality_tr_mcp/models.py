@@ -14,7 +14,7 @@ class Coordinate(BaseModel):
     lat: float
 
     @classmethod
-    def from_wkt(cls, wkt: str) -> "Coordinate":
+    def from_wkt(cls, wkt: str) -> Coordinate:
         inner = wkt.strip().removeprefix("POINT").strip().strip("()")
         lon_str, lat_str = inner.split()
         return cls(lon=float(lon_str), lat=float(lat_str))
@@ -68,7 +68,7 @@ class Station(BaseModel):
         return value.replace(tzinfo=ISTANBUL_TZ)
 
     @classmethod
-    def from_raw(cls, raw: dict) -> "Station":
+    def from_raw(cls, raw: dict) -> Station:
         return cls.model_validate(
             {
                 **raw,

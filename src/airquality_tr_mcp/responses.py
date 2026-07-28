@@ -36,9 +36,7 @@ def _data_age_warning(measured_at: datetime, now: datetime) -> str | None:
     return f"veri {hours} saat önce güncellenmiş"
 
 
-def station_summary(
-    station: Station, *, now: datetime | None = None
-) -> dict:
+def station_summary(station: Station, *, now: datetime | None = None) -> dict:
     now = now or datetime.now(ISTANBUL_TZ)
     payload = {
         "station_id": station.id,
@@ -88,9 +86,7 @@ def station_ref_with_category(
     return payload
 
 
-def _pollutant_reading(
-    pollutant: str, attr: str, station: Station
-) -> dict:
+def _pollutant_reading(pollutant: str, attr: str, station: Station) -> dict:
     if pollutant not in station.parameters:
         return {
             "deger": None,
@@ -228,14 +224,10 @@ def resolution_error_payload(
 
 def invalid_days_payload(exc: InvalidDaysError) -> dict:
     if exc.allowed_values is not None:
-        choices = " veya ".join(
-            str(value) for value in exc.allowed_values
-        )
+        choices = " veya ".join(str(value) for value in exc.allowed_values)
         detail = f"days sadece {choices} olabilir"
     else:
-        detail = (
-            f"days {exc.minimum} ile {exc.maximum} arasında olmalı"
-        )
+        detail = f"days {exc.minimum} ile {exc.maximum} arasında olmalı"
     return {
         "hata": "gecersiz_days",
         "girdi": exc.days,
@@ -258,15 +250,11 @@ def station_history_payload(
 ) -> dict:
     return {
         "ad": station.name,
-        "gunluk_ozet": [
-            daily_summary_row(summary) for summary in summaries
-        ],
+        "gunluk_ozet": [daily_summary_row(summary) for summary in summaries],
     }
 
 
-def trend_summary_payload(
-    station: Station, trend: TrendResult
-) -> dict:
+def trend_summary_payload(station: Station, trend: TrendResult) -> dict:
     return {
         "istasyon": station.name,
         "pencere_gun": trend.window_days,
@@ -314,9 +302,7 @@ def compare_cities_payload(
         "il": resolution1.province,
         "not": resolution1.note,
         "temsili_hki": hki1,
-        "temsili_kategori": category_for_status(
-            worst1.current.aqi_status
-        ),
+        "temsili_kategori": category_for_status(worst1.current.aqi_status),
         "en_kotu_istasyon": station_ref_with_category(worst1),
         "en_iyi_istasyon": station_ref_with_category(best1),
         "istasyon_sayisi": len(stations1),
@@ -328,9 +314,7 @@ def compare_cities_payload(
         "il": resolution2.province,
         "not": resolution2.note,
         "temsili_hki": hki2,
-        "temsili_kategori": category_for_status(
-            worst2.current.aqi_status
-        ),
+        "temsili_kategori": category_for_status(worst2.current.aqi_status),
         "en_kotu_istasyon": station_ref_with_category(worst2),
         "en_iyi_istasyon": station_ref_with_category(best2),
         "istasyon_sayisi": len(stations2),
@@ -351,8 +335,7 @@ def invalid_mode_payload(exc: InvalidModeError) -> dict:
         "hata": "gecersiz_mode",
         "girdi": exc.mode,
         "mesaj": (
-            f"mode sadece 'best' veya 'worst' olabilir, "
-            f"'{exc.mode}' verildi."
+            f"mode sadece 'best' veya 'worst' olabilir, '{exc.mode}' verildi."
         ),
     }
 
@@ -373,9 +356,7 @@ def province_ranking_row(rank: ProvinceRank) -> dict:
     return {
         "il": rank.province,
         "temsili_hki": station.current.aqi_index,
-        "temsili_kategori": category_for_status(
-            station.current.aqi_status
-        ),
+        "temsili_kategori": category_for_status(station.current.aqi_status),
     }
 
 
@@ -539,8 +520,7 @@ def nearest_air_quality_payload(
         ),
         "referans_istasyon": reference_row,
         "yakin_istasyonlar": [
-            nearest_station_row(item, now=now)
-            for item in selection.rated
+            nearest_station_row(item, now=now) for item in selection.rated
         ],
         "verisi_olmayan_yakin_istasyonlar": [
             nearest_station_row(item, now=now)

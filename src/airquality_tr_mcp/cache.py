@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 from .models import Station, StationReading
 from .provider import AirQualityProvider, UpstreamError

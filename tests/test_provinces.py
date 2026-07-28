@@ -107,9 +107,7 @@ def test_resolve_province_input_explicit_district_wins_over_detected_one():
 
 def test_resolve_province_input_raises_ambiguous_for_two_province_district():
     with pytest.raises(AmbiguousMatchError) as exc_info:
-        resolve_province_input(
-            "Ereğli", None, KONYA_ZONGULDAK_STATIONS
-        )
+        resolve_province_input("Ereğli", None, KONYA_ZONGULDAK_STATIONS)
     assert set(exc_info.value.candidates) == {"Konya", "Zonguldak"}
 
 
@@ -125,9 +123,7 @@ def test_resolve_province_input_auto_corrects_typo_via_fuzzy_match():
 
 
 def test_resolve_province_input_fuzzy_corrects_typo_district():
-    result = resolve_province_input(
-        "Kadikuyy", None, ISTANBUL_STATIONS
-    )
+    result = resolve_province_input("Kadikuyy", None, ISTANBUL_STATIONS)
     assert result.province == "İstanbul"
     assert result.district == "Kadıköy"
     assert "ilçe" in result.note
@@ -135,24 +131,18 @@ def test_resolve_province_input_fuzzy_corrects_typo_district():
 
 def test_resolve_province_input_fuzzy_district_typo_still_flags_ambiguous():
     with pytest.raises(AmbiguousMatchError) as exc_info:
-        resolve_province_input(
-            "Eregliy", None, KONYA_ZONGULDAK_STATIONS
-        )
+        resolve_province_input("Eregliy", None, KONYA_ZONGULDAK_STATIONS)
     assert set(exc_info.value.candidates) == {"Konya", "Zonguldak"}
 
 
 def test_resolve_province_input_fuzzy_district_ignores_generic_name():
     with pytest.raises(NoMatchError):
-        resolve_province_input(
-            "Merkezz", None, COMMON_DISTRICT_STATIONS
-        )
+        resolve_province_input("Merkezz", None, COMMON_DISTRICT_STATIONS)
 
 
 def test_stations_in_province_filters_by_city():
     stations = ISTANBUL_STATIONS + KONYA_ZONGULDAK_STATIONS
-    assert (
-        stations_in_province("İstanbul", stations) == ISTANBUL_STATIONS
-    )
+    assert stations_in_province("İstanbul", stations) == ISTANBUL_STATIONS
     assert stations_in_province("Sivas", stations) == []
 
 
@@ -235,9 +225,7 @@ def test_correct_bare_province_typo_leaves_multi_word_query_untouched():
     # WRatio would happily match "Bursa" as a substring of the whole
     # phrase, silently discarding the district/POI specificity - so
     # multi-word queries must never be corrected.
-    assert (
-        correct_bare_province_typo("bursa hürriyet") == "bursa hürriyet"
-    )
+    assert correct_bare_province_typo("bursa hürriyet") == "bursa hürriyet"
     assert (
         correct_bare_province_typo("Göbeklitepe, Şanlıurfa")
         == "Göbeklitepe, Şanlıurfa"

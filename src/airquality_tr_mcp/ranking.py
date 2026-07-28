@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from .models import Station
 
@@ -12,17 +12,13 @@ VALID_MODES = ("best", "worst")
 class InvalidModeError(Exception):
     def __init__(self, mode: str) -> None:
         self.mode = mode
-        super().__init__(
-            f"invalid mode={mode!r}, expected 'best' or 'worst'"
-        )
+        super().__init__(f"invalid mode={mode!r}, expected 'best' or 'worst'")
 
 
 class InvalidLimitError(Exception):
     def __init__(self, limit: int) -> None:
         self.limit = limit
-        super().__init__(
-            f"invalid limit={limit}, expected a positive integer"
-        )
+        super().__init__(f"invalid limit={limit}, expected a positive integer")
 
 
 def validate_ranking_args(mode: str, limit: int) -> None:

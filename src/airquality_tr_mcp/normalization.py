@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Callable
 
 from rapidfuzz import fuzz
 
@@ -46,7 +46,9 @@ class AmbiguousMatchError(Exception):
     def __init__(self, query: str, candidates: list[str]) -> None:
         self.query = query
         self.candidates = candidates
-        super().__init__(f"{query!r} matches multiple candidates: {candidates}")
+        super().__init__(
+            f"{query!r} matches multiple candidates: {candidates}"
+        )
 
 
 @dataclass

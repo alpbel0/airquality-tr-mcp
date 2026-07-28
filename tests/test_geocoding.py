@@ -232,9 +232,7 @@ async def test_success_is_cached_for_24_hours():
 
 async def test_no_result_is_negatively_cached_for_10_minutes():
     clock = _Clock()
-    inner = _FakeGeocoder(
-        [LocationNotFoundError("yok"), _place("later")]
-    )
+    inner = _FakeGeocoder([LocationNotFoundError("yok"), _place("later")])
     cached = CachedGeocoder(inner, clock=clock)
 
     with pytest.raises(LocationNotFoundError):
@@ -276,15 +274,15 @@ async def test_concurrent_duplicates_share_one_inflight_request():
     )
 
     assert [result.label for result in results] == [
-        "Ankara", "Ankara", "Ankara"
+        "Ankara",
+        "Ankara",
+        "Ankara",
     ]
     assert inner.calls == 1
 
 
 async def test_failure_removes_inflight_entry_for_retry():
-    inner = _FakeGeocoder(
-        [GeocodingTimeoutError("timeout"), _place()]
-    )
+    inner = _FakeGeocoder([GeocodingTimeoutError("timeout"), _place()])
     cached = CachedGeocoder(inner)
 
     with pytest.raises(GeocodingTimeoutError):
@@ -294,7 +292,9 @@ async def test_failure_removes_inflight_entry_for_retry():
 
 async def test_cache_evicts_least_recently_used_entry():
     clock = _Clock()
-    inner = _FakeGeocoder([_place("a"), _place("b"), _place("c"), _place("a2")])
+    inner = _FakeGeocoder(
+        [_place("a"), _place("b"), _place("c"), _place("a2")]
+    )
     cached = CachedGeocoder(inner, max_entries=2, clock=clock)
 
     await cached.geocode("a")

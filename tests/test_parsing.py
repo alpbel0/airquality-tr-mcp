@@ -1,14 +1,23 @@
-from airquality_tr_mcp.parsing import parse_bulk_stations, parse_historical_readings
+from airquality_tr_mcp.parsing import (
+    parse_bulk_stations,
+    parse_historical_readings,
+)
 
 
 def test_parse_bulk_stations_returns_all_323_stations(load_fixture_text):
-    raw_json = load_fixture_text("GetAirQualityStations_bulk_tum_ag.network-response")
+    raw_json = load_fixture_text(
+        "GetAirQualityStations_bulk_tum_ag.network-response"
+    )
     stations = parse_bulk_stations(raw_json)
     assert len(stations) == 323
 
 
-def test_parse_bulk_stations_finds_batman2_with_partial_sensors(load_fixture_text):
-    raw_json = load_fixture_text("GetAirQualityStations_bulk_tum_ag.network-response")
+def test_parse_bulk_stations_finds_batman2_with_partial_sensors(
+    load_fixture_text,
+):
+    raw_json = load_fixture_text(
+        "GetAirQualityStations_bulk_tum_ag.network-response"
+    )
     stations = parse_bulk_stations(raw_json)
     batman2 = next(s for s in stations if s.name == "Batman - 2")
     assert batman2.current.no2 is None
@@ -28,8 +37,12 @@ def test_parse_historical_readings_returns_145_hours(load_fixture_text):
     assert first.o3 is None
 
 
-def test_parse_historical_readings_handles_missing_gas_sensors(load_fixture_text):
-    raw_json = load_fixture_text("GetDetailData_batman2_eksik_olcum.network-response")
+def test_parse_historical_readings_handles_missing_gas_sensors(
+    load_fixture_text,
+):
+    raw_json = load_fixture_text(
+        "GetDetailData_batman2_eksik_olcum.network-response"
+    )
     readings = parse_historical_readings(raw_json)
     assert len(readings) == 145
     # NO2/SO2/CO/O3 are intermittently null across the 145h window (this

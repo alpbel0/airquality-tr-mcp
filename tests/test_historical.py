@@ -1,25 +1,17 @@
+from datetime import datetime
+from datetime import timedelta as _timedelta
+
 import pytest
-from datetime import datetime, timedelta as _timedelta
 
 from airquality_tr_mcp.historical import (
     MAX_DAYS,
     MIN_DAYS,
     TREND_WINDOWS,
     InvalidDaysError,
-    SequentialThrottle,
     validate_history_days,
     validate_trend_days,
 )
 from airquality_tr_mcp.models import ISTANBUL_TZ, StationReading
-
-
-class SequentialThrottleNoSleep(SequentialThrottle):
-    def __init__(self):
-        super().__init__(sleep=self._noop)
-
-    @staticmethod
-    async def _noop(seconds):
-        return None
 
 
 def test_validate_history_days_accepts_boundaries():
@@ -48,33 +40,7 @@ def test_validate_trend_days_rejects_four():
     assert exc_info.value.allowed_values == TREND_WINDOWS
 
 
-async def test_sequential_throttle_does_not_sleep_before_first_call():
-    sleeps = []
-
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-
-    throttle = SequentialThrottle(sleep=fake_sleep)
-    await throttle.wait()
-    assert sleeps == []
-
-
-async def test_sequential_throttle_sleeps_before_every_subsequent_call():
-    sleeps = []
-
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-
-    throttle = SequentialThrottle(sleep=fake_sleep)
-    await throttle.wait()
-    await throttle.wait()
-    await throttle.wait()
-    assert sleeps == [1.0, 1.0]
-
-
-def _reading(
-    hours_ago: int, now: datetime, *, aqi=10.0
-) -> StationReading:
+def _reading(hours_ago: int, now: datetime, *, aqi=10.0) -> StationReading:
     return StationReading.model_validate(
         {
             "StationId": "abc",
@@ -123,14 +89,12 @@ async def test_fetch_station_window_single_call_for_days_within_six():
         provider,
         "abc",
         3,
-        throttle=SequentialThrottleNoSleep(),
         now=now,
     )
 
     assert len(provider.calls) == 1
     assert all(
-        reading.measured_at >= now - _timedelta(days=3)
-        for reading in result
+        reading.measured_at >= now - _timedelta(days=3) for reading in result
     )
     assert result == sorted(result, key=lambda reading: reading.measured_at)
 
@@ -145,9 +109,9 @@ async def test_fetch_station_window_steps_end_date_for_days_beyond_six():
         StationReading.model_validate(
             {
                 "StationId": "abc",
-                "Date": (
-                    oldest_first - _timedelta(hours=hours)
-                ).replace(tzinfo=None).isoformat(),
+                "Date": (oldest_first - _timedelta(hours=hours))
+                .replace(tzinfo=None)
+                .isoformat(),
                 "NO2": None,
                 "SO2": None,
                 "CO": None,
@@ -173,7 +137,6 @@ async def test_fetch_station_window_steps_end_date_for_days_beyond_six():
         provider,
         "abc",
         8,
-        throttle=SequentialThrottleNoSleep(),
         now=now,
     )
 
@@ -194,9 +157,9 @@ async def test_fetch_station_window_dedupes_overlapping_hours():
         StationReading.model_validate(
             {
                 "StationId": "abc",
-                "Date": (
-                    oldest_first - _timedelta(hours=hours)
-                ).replace(tzinfo=None).isoformat(),
+                "Date": (oldest_first - _timedelta(hours=hours))
+                .replace(tzinfo=None)
+                .isoformat(),
                 "NO2": None,
                 "SO2": None,
                 "CO": None,
@@ -222,7 +185,6 @@ async def test_fetch_station_window_dedupes_overlapping_hours():
         provider,
         "abc",
         8,
-        throttle=SequentialThrottleNoSleep(),
         now=now,
     )
 
@@ -271,9 +233,9 @@ def test_compute_trend_detects_worsening():
     from airquality_tr_mcp.historical import compute_trend
 
     now = datetime(2026, 7, 27, 12, 0, 0, tzinfo=ISTANBUL_TZ)
-    readings = [
-        _reading(hours, now, aqi=10.0) for hours in range(36, 72)
-    ] + [_reading(hours, now, aqi=30.0) for hours in range(0, 36)]
+    readings = [_reading(hours, now, aqi=10.0) for hours in range(36, 72)] + [
+        _reading(hours, now, aqi=30.0) for hours in range(0, 36)
+    ]
 
     result = compute_trend(readings, 3, now=now)
 
@@ -288,9 +250,9 @@ def test_compute_trend_detects_improving():
     from airquality_tr_mcp.historical import compute_trend
 
     now = datetime(2026, 7, 27, 12, 0, 0, tzinfo=ISTANBUL_TZ)
-    readings = [
-        _reading(hours, now, aqi=30.0) for hours in range(36, 72)
-    ] + [_reading(hours, now, aqi=10.0) for hours in range(0, 36)]
+    readings = [_reading(hours, now, aqi=30.0) for hours in range(36, 72)] + [
+        _reading(hours, now, aqi=10.0) for hours in range(0, 36)
+    ]
 
     result = compute_trend(readings, 3, now=now)
 
@@ -301,9 +263,9 @@ def test_compute_trend_detects_stable_within_threshold():
     from airquality_tr_mcp.historical import compute_trend
 
     now = datetime(2026, 7, 27, 12, 0, 0, tzinfo=ISTANBUL_TZ)
-    readings = [
-        _reading(hours, now, aqi=20.0) for hours in range(36, 72)
-    ] + [_reading(hours, now, aqi=23.0) for hours in range(0, 36)]
+    readings = [_reading(hours, now, aqi=20.0) for hours in range(36, 72)] + [
+        _reading(hours, now, aqi=23.0) for hours in range(0, 36)
+    ]
 
     result = compute_trend(readings, 3, now=now)
 
@@ -324,7 +286,7 @@ def test_compute_trend_returns_yetersiz_veri_when_a_half_is_empty():
     assert result.difference is None
 
 
-def test_compute_trend_returns_yetersiz_veri_for_data_clustered_in_one_corner():
+def test_compute_trend_rejects_data_clustered_in_one_corner():
     from airquality_tr_mcp.historical import compute_trend
 
     now = datetime(2026, 7, 27, 12, 0, 0, tzinfo=ISTANBUL_TZ)
