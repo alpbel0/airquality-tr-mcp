@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from typing import Callable
+
+from rapidfuzz import fuzz
 
 FUZZY_THRESHOLD = 0.80
 FUZZY_TIE_BREAK = 0.05
+
+Scorer = Callable[[str, str], float]
 
 _TR_ASCII_MAP = str.maketrans(
     {
@@ -50,8 +55,20 @@ class FuzzyMatch:
     score: float
 
 
+def _ratio_scorer(query: str, candidate: str) -> float:
+    return SequenceMatcher(None, query, candidate).ratio()
+
+
+def partial_ratio_scorer(query: str, candidate: str) -> float:
+    """Score the query against the candidate's best-matching substring."""
+    return fuzz.partial_ratio(query, candidate) / 100
+
+
 def fuzzy_best_match(
-    normalized_query: str, candidates: list[str]
+    normalized_query: str,
+    candidates: list[str],
+    *,
+    scorer: Scorer = _ratio_scorer,
 ) -> FuzzyMatch:
     """Return a confident fuzzy match or raise a structured match error."""
     if not candidates:
@@ -63,10 +80,7 @@ def fuzzy_best_match(
 
     scored = sorted(
         (
-            (
-                candidate,
-                SequenceMatcher(None, normalized_query, normalized).ratio(),
-            )
+            (candidate, scorer(normalized_query, normalized))
             for normalized, candidate in unique_candidates.items()
         ),
         key=lambda pair: pair[1],

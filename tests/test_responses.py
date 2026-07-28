@@ -33,6 +33,7 @@ from airquality_tr_mcp.responses import (
     invalid_limit_payload,
     invalid_mode_payload,
     invalid_pollutant_payload,
+    malformed_station_id_payload,
     nearest_air_quality_payload,
     province_ranking_row,
     resolution_error_payload,
@@ -66,6 +67,16 @@ def test_missing_api_key_payload_contains_safe_setup_steps():
     assert "yeniden başlat" in " ".join(payload["cozum_adimlari"]).lower()
     assert "latitude" in payload["alternatif"]
     assert "sohbete" in payload["guvenlik_uyarisi"]
+
+
+def test_malformed_station_id_payload_explains_both_valid_input_forms():
+    payload = malformed_station_id_payload("114b79f4")
+
+    assert payload["hata"] == "eksik_veya_bozuk_id"
+    assert payload["girdi"] == "114b79f4"
+    assert "'114b79f4'" in payload["mesaj"]
+    assert "ID" in payload["mesaj"].upper()
+    assert "istasyon ad" in payload["mesaj"].lower()
 
 
 def test_ambiguous_location_payload_lists_at_most_three_candidates():
@@ -156,6 +167,110 @@ def test_null_reference_reports_coverage_without_country_claim(
     )
 
 
+def test_null_reference_with_rated_stations_reports_their_distance(
+    load_fixture_text,
+):
+    station = _load_station(load_fixture_text)
+    station.current.aqi_index = 54.5
+    station.current.measured_at = datetime(
+        2026, 7, 27, 11, 30, tzinfo=ISTANBUL_TZ
+    )
+    rated_but_outside_reference_cap = StationDistance(station, 118.9)
+    selection = NearestStationsResult(
+        reference=None,
+        rated=(rated_but_outside_reference_cap,),
+        unrated_closer=(),
+        unrated_count=0,
+        nearest_outside=None,
+    )
+
+    payload = nearest_air_quality_payload(
+        input_payload={"latitude": 37.55, "longitude": 44.05},
+        location_payload={
+            "lat": 37.55,
+            "lon": 44.05,
+            "konum_kaynagi": "kullanici_koordinati",
+        },
+        selection=selection,
+        max_distance_km=150.0,
+        now=datetime(2026, 7, 27, 12, tzinfo=ISTANBUL_TZ),
+    )
+
+    assert payload["referans_hki"] is None
+    assert payload["referans_istasyon"] is None
+    assert len(payload["yakin_istasyonlar"]) == 1
+    assert "118.9" in payload["aciklama"]
+    assert "75 km" in payload["aciklama"]
+
+
+def test_null_reference_with_valid_nearest_outside_reports_its_distance(
+    load_fixture_text,
+):
+    station = _load_station(load_fixture_text)
+    station.current.aqi_index = 40.856
+    station.current.measured_at = datetime(
+        2026, 7, 28, 11, 30, tzinfo=ISTANBUL_TZ
+    )
+    valid_but_outside_max_distance = StationDistance(station, 0.7)
+    selection = NearestStationsResult(
+        reference=None,
+        rated=(),
+        unrated_closer=(),
+        unrated_count=0,
+        nearest_outside=valid_but_outside_max_distance,
+    )
+
+    payload = nearest_air_quality_payload(
+        input_payload={"latitude": 41.0082, "longitude": 28.9784},
+        location_payload={
+            "lat": 41.0082,
+            "lon": 28.9784,
+            "konum_kaynagi": "kullanici_koordinati",
+        },
+        selection=selection,
+        max_distance_km=0.5,
+        now=datetime(2026, 7, 28, 12, tzinfo=ISTANBUL_TZ),
+    )
+
+    assert payload["referans_hki"] is None
+    assert payload["yakin_istasyonlar"] == []
+    assert "0.7" in payload["aciklama"]
+
+
+def test_null_reference_with_unrated_nearest_outside_keeps_flat_message(
+    load_fixture_text,
+):
+    station = _load_station(load_fixture_text)
+    station.current.aqi_index = None
+    station.current.measured_at = datetime(
+        2026, 7, 28, 11, 30, tzinfo=ISTANBUL_TZ
+    )
+    unrated_outside = StationDistance(station, 0.7)
+    selection = NearestStationsResult(
+        reference=None,
+        rated=(),
+        unrated_closer=(),
+        unrated_count=0,
+        nearest_outside=unrated_outside,
+    )
+
+    payload = nearest_air_quality_payload(
+        input_payload={"latitude": 41.0082, "longitude": 28.9784},
+        location_payload={
+            "lat": 41.0082,
+            "lon": 28.9784,
+            "konum_kaynagi": "kullanici_koordinati",
+        },
+        selection=selection,
+        max_distance_km=0.5,
+        now=datetime(2026, 7, 28, 12, tzinfo=ISTANBUL_TZ),
+    )
+
+    assert payload["referans_hki"] is None
+    assert "0.7" not in payload["aciklama"]
+    assert "yoktur" in payload["aciklama"]
+
+
 def test_resolution_error_payload_for_no_match():
     exc = NoMatchError("Anlatayy", ["Antalya", "Ankara"])
     payload = resolution_error_payload(exc)
@@ -170,6 +285,21 @@ def test_resolution_error_payload_for_no_match_without_suggestions():
     payload = resolution_error_payload(exc)
     assert payload["oneriler"] == []
     assert "Zzzzz" in payload["mesaj"]
+
+
+def test_resolution_error_payload_for_no_match_notes_possible_unmonitored_place():
+    exc = NoMatchError("Datça", ["Adana", "Hatay", "Batman"])
+    payload = resolution_error_payload(exc)
+
+    assert "yazım hatası" in payload["mesaj"]
+    assert "aktif bir hava kalitesi istasyonu" in payload["mesaj"]
+
+
+def test_resolution_error_payload_for_no_match_station_entity_has_no_place_caveat():
+    exc = NoMatchError("Zzzzzzzzzzz", [])
+    payload = resolution_error_payload(exc, entity_label="istasyon")
+
+    assert "aktif bir hava kalitesi istasyonu" not in payload["mesaj"]
 
 
 def test_resolution_error_payload_for_ambiguous_match():
@@ -509,6 +639,87 @@ def test_compare_cities_payload_equal_hki_states_same_level(
     )
 
     assert "aynı seviyede" in payload["fark_cumlesi"]
+
+
+def test_compare_cities_payload_includes_ilce_when_district_resolved(
+    load_fixture_text,
+):
+    stations = _load_all_stations(load_fixture_text)
+    batman = [s for s in stations if s.city == "Batman"]
+    kayseri = [s for s in stations if s.city == "Kayseri"]
+    worst1 = max(batman, key=lambda s: s.current.aqi_index)
+    best1 = min(batman, key=lambda s: s.current.aqi_index)
+    worst2 = max(kayseri, key=lambda s: s.current.aqi_index)
+    best2 = min(kayseri, key=lambda s: s.current.aqi_index)
+    resolution1 = ProvinceResolution(
+        province="Batman",
+        district="Merkez",
+        note="'Merkez' bir ilçe olarak algılandı, bağlı olduğu il: Batman.",
+    )
+    resolution2 = ProvinceResolution(
+        province="Kayseri", district=None, note=None
+    )
+
+    payload = compare_cities_payload(
+        resolution1,
+        worst1,
+        best1,
+        batman,
+        resolution2,
+        worst2,
+        best2,
+        kayseri,
+        {},
+    )
+
+    assert payload["il1"]["ilce"] == "Merkez"
+    assert "ilce" not in payload["il2"]
+
+
+def test_compare_cities_payload_sentence_names_districts_not_shared_province(
+    load_fixture_text,
+):
+    stations = _load_all_stations(load_fixture_text)
+    station_a = stations[0].model_copy(deep=True)
+    station_a.city = "İstanbul"
+    station_a.district = "Kadıköy"
+    station_a.current.aqi_index = 30.0
+    station_b = stations[1].model_copy(deep=True)
+    station_b.city = "İstanbul"
+    station_b.district = "Beşiktaş"
+    station_b.current.aqi_index = 60.0
+    resolution1 = ProvinceResolution(
+        province="İstanbul",
+        district="Kadıköy",
+        note=(
+            "'Kadıköy' bir ilçe olarak algılandı, "
+            "bağlı olduğu il: İstanbul."
+        ),
+    )
+    resolution2 = ProvinceResolution(
+        province="İstanbul",
+        district="Beşiktaş",
+        note=(
+            "'Beşiktaş' bir ilçe olarak algılandı, "
+            "bağlı olduğu il: İstanbul."
+        ),
+    )
+
+    payload = compare_cities_payload(
+        resolution1,
+        station_a,
+        station_a,
+        [station_a],
+        resolution2,
+        station_b,
+        station_b,
+        [station_b],
+        {},
+    )
+
+    assert "Kadıköy" in payload["fark_cumlesi"]
+    assert "Beşiktaş" in payload["fark_cumlesi"]
+    assert "İstanbul ve İstanbul" not in payload["fark_cumlesi"]
 
 
 def test_invalid_mode_payload_shape():

@@ -31,6 +31,31 @@ class _FakeProvider:
         return self._stations
 
 
+class _FakeHistoryProvider(_FakeProvider):
+    async def fetch_station_history(self, station_id, end_date=None):
+        return [
+            StationReading.model_validate(
+                {
+                    "StationId": station_id,
+                    "Date": "2026-07-27T10:00:00",
+                    "NO2": None,
+                    "SO2": None,
+                    "CO": None,
+                    "O3": None,
+                    "PM10": None,
+                    "PM25": None,
+                    "CO_1": None,
+                    "O3_1": None,
+                    "PM10_1": None,
+                    "AQIIndex": 15.0,
+                    "AQIStatus": 0,
+                    "ContaminantParameter": "PM10",
+                    "AQIType": 0,
+                }
+            )
+        ]
+
+
 class _FailingProvider:
     async def fetch_all_stations(self):
         from airquality_tr_mcp.provider import UpstreamError
@@ -587,6 +612,67 @@ async def test_get_station_detail_returns_error_for_unmatched_name(
     assert result.data["hata"] == "eslesme_bulunamadi"
 
 
+async def test_get_station_detail_unmatched_name_uses_station_entity_label(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_station_detail", {"station": "Zzzzzzzzzzz"}
+        )
+
+    assert result.data["hata"] == "eslesme_bulunamadi"
+    assert "ilçe" not in result.data["mesaj"]
+    assert "aktif bir hava kalitesi istasyonu" not in result.data["mesaj"]
+
+
+async def test_get_station_detail_rejects_partial_id_without_fuzzy_matching(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_station_detail", {"station": "114b79f4"}
+        )
+    assert result.data["hata"] == "eksik_veya_bozuk_id"
+    assert result.data["girdi"] == "114b79f4"
+
+
+async def test_get_station_detail_rejects_partial_id_with_dashes(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_station_detail", {"station": "114b79f4-ede4"}
+        )
+    assert result.data["hata"] == "eksik_veya_bozuk_id"
+    assert result.data["girdi"] == "114b79f4-ede4"
+
+
+async def test_get_station_detail_still_fuzzy_matches_real_names(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+    target = next(
+        station for station in stations if station.name == "Batman - 2"
+    )
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_station_detail", {"station": "Batman - 22"}
+        )
+    assert result.data["station_id"] == target.id
+    assert "bulunamadı" in result.data["not"]
+
+
 async def test_get_station_detail_ambiguity_message_names_station_parameter(
     load_fixture_text, monkeypatch
 ):
@@ -1075,6 +1161,57 @@ async def test_compare_cities_warns_when_a_province_has_no_stations(
 
     assert "uyari" in result.data
     assert "Hakkari" in result.data["uyari"]
+
+
+async def test_compare_cities_filters_by_detected_district(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    istanbul = [s for s in stations if s.city == "İstanbul"]
+    districts = {s.district for s in istanbul}
+    assert len(districts) >= 2, (
+        "fixture must contain at least two İstanbul districts for this "
+        "test to be meaningful"
+    )
+    district_a, district_b = sorted(districts)[:2]
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "compare_cities",
+            {"province1": district_a, "province2": district_b},
+        )
+
+    assert result.data["il1"]["ilce"] == district_a
+    assert result.data["il2"]["ilce"] == district_b
+    expected_count_a = len(
+        [s for s in istanbul if s.district == district_a]
+    )
+    expected_count_b = len(
+        [s for s in istanbul if s.district == district_b]
+    )
+    assert result.data["il1"]["istasyon_sayisi"] == expected_count_a
+    assert result.data["il2"]["istasyon_sayisi"] == expected_count_b
+
+
+async def test_compare_cities_no_longer_returns_identical_sides_for_different_districts(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    istanbul = [s for s in stations if s.city == "İstanbul"]
+    districts = {s.district for s in istanbul}
+    assert len(districts) >= 2
+    district_a, district_b = sorted(districts)[:2]
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "compare_cities",
+            {"province1": district_a, "province2": district_b},
+        )
+
+    assert result.data["il1"]["istasyon_sayisi"] != len(istanbul)
+    assert result.data["il2"]["istasyon_sayisi"] != len(istanbul)
 
 
 async def test_compare_cities_returns_structured_error_on_upstream_failure(
@@ -1567,3 +1704,86 @@ async def test_statistical_summary_does_not_change_ranking_contract(
         )
 
     assert "temsili_hki" in result.data["siralama"][0]
+
+
+async def test_get_air_quality_fuzzy_corrects_district_typo(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_air_quality",
+            {"province": "İstanbul", "district": "Kadikoyy"},
+        )
+
+    assert result.data.get("hata") is None
+    assert "Kadıköy" in result.data["not"]
+    assert result.data["ilce_ozeti"] is not None
+
+
+async def test_get_historical_data_fuzzy_corrects_district_typo(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(
+        server, "provider", _FakeHistoryProvider(stations)
+    )
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_historical_data",
+            {
+                "province": "İstanbul",
+                "district": "Kadikoyy",
+                "days": 2,
+            },
+        )
+
+    assert result.data.get("hata") is None
+    assert "Kadıköy" in result.data["not"]
+    assert result.data["istasyonlar"]
+
+
+async def test_get_trend_summary_fuzzy_corrects_district_typo(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(
+        server, "provider", _FakeHistoryProvider(stations)
+    )
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "get_trend_summary",
+            {
+                "province": "İstanbul",
+                "district": "Kadikoyy",
+            },
+        )
+
+    assert result.data.get("hata") is None
+    assert "Kadıköy" in result.data["not"]
+    assert result.data["istasyonlar"]
+
+
+async def test_check_alert_fuzzy_corrects_district_typo(
+    load_fixture_text, monkeypatch
+):
+    stations = _load_all_stations(load_fixture_text)
+    monkeypatch.setattr(server, "provider", _FakeProvider(stations))
+
+    async with Client(server.mcp) as client:
+        result = await client.call_tool(
+            "check_alert",
+            {
+                "province": "İstanbul",
+                "district": "Kadikoyy",
+                "threshold": 50.0,
+            },
+        )
+
+    assert result.data.get("hata") is None
+    assert "Kadıköy" in result.data["not"]
+    assert result.data["istasyonlar"]

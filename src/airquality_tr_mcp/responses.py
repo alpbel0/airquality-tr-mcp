@@ -173,6 +173,20 @@ def missing_station_id_payload(query: str) -> dict:
     }
 
 
+def malformed_station_id_payload(query: str) -> dict:
+    return {
+        "hata": "eksik_veya_bozuk_id",
+        "girdi": query,
+        "mesaj": (
+            f"'{query}' eksik veya bozuk bir istasyon ID'sine benziyor "
+            "(yalnızca onaltılık karakterler ve tire içeriyor). Tam "
+            "istasyon ID'sini (örn. "
+            "'114b79f4-ede4-44d6-8154-c5dece13f499') veya istasyon "
+            "adını (örn. 'Manisa - Akhisar') kullanın."
+        ),
+    }
+
+
 def resolution_error_payload(
     exc: NoMatchError | AmbiguousMatchError,
     *,
@@ -198,11 +212,17 @@ def resolution_error_payload(
         if exc.suggestions
         else ""
     )
+    place_caveat = (
+        " Bu bir yazım hatası olabilir, ya da gerçek bir il/ilçe olup şu "
+        "anda aktif bir hava kalitesi istasyonu olmayabilir."
+        if entity_label == "il"
+        else ""
+    )
     return {
         "hata": "eslesme_bulunamadi",
         "girdi": exc.query,
         "oneriler": exc.suggestions,
-        "mesaj": f"'{exc.query}' bulunamadı.{suggestions_text}",
+        "mesaj": f"'{exc.query}' bulunamadı.{suggestions_text}{place_caveat}",
     }
 
 
@@ -268,49 +288,59 @@ def compare_cities_payload(
     stations2: list[Station],
     common_pollutants: dict,
 ) -> dict:
+    label1 = resolution1.district or resolution1.province
+    label2 = resolution2.district or resolution2.province
     hki1 = worst1.current.aqi_index
     hki2 = worst2.current.aqi_index
     if hki1 < hki2:
         difference_sentence = (
-            f"{resolution1.province}'nin hava kalitesi şu an "
-            f"{resolution2.province}'dan daha iyi "
+            f"{label1}'nin hava kalitesi şu an "
+            f"{label2}'dan daha iyi "
             f"(HKİ {hki1:.0f}'e karşı {hki2:.0f})."
         )
     elif hki1 > hki2:
         difference_sentence = (
-            f"{resolution2.province}'nin hava kalitesi şu an "
-            f"{resolution1.province}'dan daha iyi "
+            f"{label2}'nin hava kalitesi şu an "
+            f"{label1}'dan daha iyi "
             f"(HKİ {hki2:.0f}'e karşı {hki1:.0f})."
         )
     else:
         difference_sentence = (
-            f"{resolution1.province} ve {resolution2.province}'nin "
+            f"{label1} ve {label2}'nin "
             f"hava kalitesi şu an aynı seviyede (HKİ {hki1:.0f})."
         )
 
+    il1_payload = {
+        "il": resolution1.province,
+        "not": resolution1.note,
+        "temsili_hki": hki1,
+        "temsili_kategori": category_for_status(
+            worst1.current.aqi_status
+        ),
+        "en_kotu_istasyon": station_ref_with_category(worst1),
+        "en_iyi_istasyon": station_ref_with_category(best1),
+        "istasyon_sayisi": len(stations1),
+    }
+    if resolution1.district:
+        il1_payload["ilce"] = resolution1.district
+
+    il2_payload = {
+        "il": resolution2.province,
+        "not": resolution2.note,
+        "temsili_hki": hki2,
+        "temsili_kategori": category_for_status(
+            worst2.current.aqi_status
+        ),
+        "en_kotu_istasyon": station_ref_with_category(worst2),
+        "en_iyi_istasyon": station_ref_with_category(best2),
+        "istasyon_sayisi": len(stations2),
+    }
+    if resolution2.district:
+        il2_payload["ilce"] = resolution2.district
+
     return {
-        "il1": {
-            "il": resolution1.province,
-            "not": resolution1.note,
-            "temsili_hki": hki1,
-            "temsili_kategori": category_for_status(
-                worst1.current.aqi_status
-            ),
-            "en_kotu_istasyon": station_ref_with_category(worst1),
-            "en_iyi_istasyon": station_ref_with_category(best1),
-            "istasyon_sayisi": len(stations1),
-        },
-        "il2": {
-            "il": resolution2.province,
-            "not": resolution2.note,
-            "temsili_hki": hki2,
-            "temsili_kategori": category_for_status(
-                worst2.current.aqi_status
-            ),
-            "en_kotu_istasyon": station_ref_with_category(worst2),
-            "en_iyi_istasyon": station_ref_with_category(best2),
-            "istasyon_sayisi": len(stations2),
-        },
+        "il1": il1_payload,
+        "il2": il2_payload,
         "ortak_kirleticiler": common_pollutants,
         "fark_cumlesi": difference_sentence,
     }
@@ -450,6 +480,41 @@ def nearest_station_row(
     return row
 
 
+def _nearest_air_quality_aciklama(
+    selection: NearestStationsResult,
+) -> str:
+    if selection.reference is not None:
+        return (
+            "Referans HKİ hesaplanmamıştır; en yakın geçerli "
+            "istasyonun resmi UHKİA değeridir."
+        )
+    if selection.rated:
+        nearest_rated = selection.rated[0]
+        return (
+            "75 km referans sınırı içinde geçerli HKİ ölçümü bulunan "
+            "istasyon yoktur; belirtilen mesafe içinde en yakın geçerli "
+            f"istasyon {nearest_rated.distance_km:.1f} km uzaklıkta "
+            "bulunmuştur (75 km sınırı dışında olduğu için referans "
+            "olarak sayılmamaktadır)."
+        )
+    nearest_outside = selection.nearest_outside
+    if (
+        nearest_outside is not None
+        and nearest_outside.station.current.aqi_index is not None
+    ):
+        return (
+            "Belirtilen mesafe içinde geçerli HKİ ölçümü bulunan "
+            "istasyon yoktur; en yakın geçerli istasyon "
+            f"{nearest_outside.distance_km:.1f} km uzaklıkta bulunmuştur "
+            "(belirtilen mesafe sınırı dışında olduğu için "
+            "listelenmemiştir)."
+        )
+    return (
+        "Belirlenen mesafe ve 75 km referans sınırı içinde geçerli "
+        "HKİ ölçümü bulunan istasyon yoktur."
+    )
+
+
 def nearest_air_quality_payload(
     *,
     input_payload: dict,
@@ -483,13 +548,7 @@ def nearest_air_quality_payload(
         ],
         "verisiz_istasyon_sayisi": selection.unrated_count,
         "max_mesafe_km": max_distance_km,
-        "aciklama": (
-            "Referans HKİ hesaplanmamıştır; en yakın geçerli "
-            "istasyonun resmi UHKİA değeridir."
-            if selection.reference is not None
-            else "Belirlenen mesafe ve 75 km referans sınırı içinde "
-            "geçerli HKİ ölçümü bulunan istasyon yoktur."
-        ),
+        "aciklama": _nearest_air_quality_aciklama(selection),
         "kaynaklar": {
             "konum": (
                 "HeiGIT/Pelias"

@@ -10,6 +10,7 @@ from .normalization import (
     NoMatchError,
     fuzzy_best_match,
     normalize_tr,
+    partial_ratio_scorer,
 )
 
 MAX_DISTRICT_PROVINCES = 3
@@ -30,6 +31,54 @@ class ProvinceResolution:
     province: str
     district: str | None
     note: str | None
+
+
+@dataclass
+class DistrictMatch:
+    stations: list[Station]
+    matched_name: str
+    note: str | None
+
+
+def match_district(
+    district_input: str, stations: list[Station]
+) -> DistrictMatch | None:
+    """Resolve a district against the names present in the station set."""
+    normalized_query = normalize_tr(district_input)
+    exact = [
+        station
+        for station in stations
+        if normalize_tr(station.district) == normalized_query
+    ]
+    if exact:
+        return DistrictMatch(
+            stations=exact,
+            matched_name=exact[0].district,
+            note=None,
+        )
+
+    district_names = sorted({station.district for station in stations})
+    try:
+        match = fuzzy_best_match(
+            normalized_query,
+            district_names,
+            scorer=partial_ratio_scorer,
+        )
+    except (NoMatchError, AmbiguousMatchError):
+        return None
+
+    matched = [
+        station for station in stations if station.district == match.value
+    ]
+    note = (
+        f"'{district_input}' ilçesi bulunamadı, "
+        f"'{match.value}' için sonuçlar gösteriliyor."
+    )
+    return DistrictMatch(
+        stations=matched,
+        matched_name=match.value,
+        note=note,
+    )
 
 
 def stations_in_province(
@@ -100,7 +149,9 @@ def resolve_province_input(
         )
 
     try:
-        match = fuzzy_best_match(normalized_query, canonical)
+        match = fuzzy_best_match(
+            normalized_query, canonical, scorer=partial_ratio_scorer
+        )
     except NoMatchError as exc:
         raise NoMatchError(province_input, exc.suggestions) from exc
     except AmbiguousMatchError as exc:

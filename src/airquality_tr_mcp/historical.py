@@ -185,31 +185,38 @@ class TrendResult:
 
 
 def compute_trend(
-    readings: list[StationReading], window_days: int
+    readings: list[StationReading],
+    window_days: int,
+    *,
+    now: datetime | None = None,
 ) -> TrendResult:
-    sorted_readings = sorted(
-        readings, key=lambda reading: reading.measured_at
-    )
+    now = now or datetime.now(ISTANBUL_TZ)
+    window_start = now - timedelta(days=window_days)
+    midpoint = now - timedelta(days=window_days / 2)
+
     rated = [
         reading
-        for reading in sorted_readings
+        for reading in readings
         if reading.aqi_index is not None
+        and window_start <= reading.measured_at <= now
     ]
-    if len(rated) < 2:
-        return TrendResult("stabil", window_days, None, None, None)
+    first_half = [
+        reading for reading in rated if reading.measured_at <= midpoint
+    ]
+    second_half = [
+        reading for reading in rated if reading.measured_at > midpoint
+    ]
 
-    midpoint = len(rated) // 2
-    first_half = rated[:midpoint]
-    second_half = rated[midpoint:]
+    if not first_half or not second_half:
+        return TrendResult(
+            "yetersiz_veri", window_days, None, None, None
+        )
+
     first_avg = sum(
-        reading.aqi_index
-        for reading in first_half
-        if reading.aqi_index is not None
+        reading.aqi_index for reading in first_half
     ) / len(first_half)
     second_avg = sum(
-        reading.aqi_index
-        for reading in second_half
-        if reading.aqi_index is not None
+        reading.aqi_index for reading in second_half
     ) / len(second_half)
     difference = second_avg - first_avg
 

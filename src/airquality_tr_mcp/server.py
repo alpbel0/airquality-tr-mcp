@@ -39,7 +39,11 @@ from .normalization import (
 )
 from .provider import AirQualityProvider, UhkiaProvider, UpstreamError
 from .pollutants import POLLUTANT_FIELDS, resolve_pollutant
-from .provinces import resolve_province_input, stations_in_province
+from .provinces import (
+    match_district,
+    resolve_province_input,
+    stations_in_province,
+)
 from .ranking import (
     InvalidLimitError,
     InvalidModeError,
@@ -58,6 +62,7 @@ from .responses import (
     invalid_mode_payload,
     invalid_nearest_input_payload,
     invalid_pollutant_payload,
+    malformed_station_id_payload,
     missing_station_id_payload,
     nearest_air_quality_payload,
     province_ranking_row,
@@ -89,6 +94,7 @@ STATION_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+PARTIAL_STATION_ID_RE = re.compile(r"^[0-9a-fA-F-]{6,}$")
 
 
 def _pop_staleness_warning() -> str | None:
@@ -218,14 +224,13 @@ async def get_air_quality(
         )
 
     breakdown_source = province_stations
+    district_note = None
+    district_label = resolution.district
     if resolution.district:
-        normalized_district = normalize_tr(resolution.district)
-        breakdown_source = [
-            station
-            for station in province_stations
-            if normalize_tr(station.district) == normalized_district
-        ]
-        if not breakdown_source:
+        district_match = match_district(
+            resolution.district, province_stations
+        )
+        if district_match is None:
             return _attach_staleness_warning(
                 district_error_payload(
                     resolution.province,
@@ -234,13 +239,21 @@ async def get_air_quality(
                 ),
                 stale_warning,
             )
+        breakdown_source = district_match.stations
+        district_note = district_match.note
+        district_label = district_match.matched_name
 
+    combined_note = (
+        f"{resolution.note} {district_note}".strip()
+        if resolution.note and district_note
+        else district_note or resolution.note
+    )
     province_summary = summarize_aqi(province_stations)
     if province_summary is None:
         return _attach_staleness_warning(
             {
                 "il": resolution.province,
-                "not": resolution.note,
+                "not": combined_note,
                 "uyari": (
                     f"'{resolution.province}' ilindeki hiçbir istasyonda "
                     "şu an geçerli bir HKİ ölçümü yok."
@@ -255,7 +268,7 @@ async def get_air_quality(
 
     payload = {
         "il": resolution.province,
-        "not": resolution.note,
+        "not": combined_note,
         "il_ozeti": air_quality_summary_payload(province_summary),
         "istasyonlar": [
             station_breakdown_row(station)
@@ -265,7 +278,7 @@ async def get_air_quality(
     if resolution.district:
         payload["ilce_ozeti"] = air_quality_summary_payload(
             summarize_aqi(breakdown_source),
-            scope_label=resolution.district,
+            scope_label=district_label,
         )
     return _attach_staleness_warning(payload, stale_warning)
 
@@ -283,6 +296,10 @@ async def get_nearest_air_quality(
     location kullanımı ORS_API_KEY gerektirir ve metni HeiGIT/Pelias'a
     gönderir. latitude/longitude kullanımı geocoder çağırmaz. referans_hki
     tahmin veya ortalama değil, en yakın geçerli istasyonun resmi HKİ'sidir.
+
+    limit parametresi 'yakin_istasyonlar' (geçerli HKİ verisi olan) ve
+    'verisi_olmayan_yakin_istasyonlar' (veri gelmeyen) listelerine AYRI
+    AYRI uygulanır; toplam yanıt en fazla 2×limit istasyon içerebilir.
     """
     try:
         mode = validate_nearest_input(
@@ -377,6 +394,11 @@ async def get_station_detail(station: str) -> dict:
             station_detail_payload(match), stale_warning
         )
 
+    if PARTIAL_STATION_ID_RE.match(query):
+        return _attach_staleness_warning(
+            malformed_station_id_payload(query), stale_warning
+        )
+
     normalized_query = normalize_tr(query)
     exact = next(
         (
@@ -399,7 +421,9 @@ async def get_station_detail(station: str) -> dict:
     except NoMatchError as exc:
         return _attach_staleness_warning(
             resolution_error_payload(
-                NoMatchError(query, exc.suggestions)
+                NoMatchError(query, exc.suggestions),
+                entity_label="istasyon",
+                parameter_name="station",
             ),
             stale_warning,
         )
@@ -428,16 +452,15 @@ async def get_station_detail(station: str) -> dict:
 
 def _select_history_stations(
     resolution, province_stations: list[Station]
-) -> list[Station] | None:
-    """Select all district matches or the province's worst rated station."""
+) -> tuple[list[Station], str | None] | None:
+    """Select district matches or the province's worst rated station."""
     if resolution.district:
-        normalized_district = normalize_tr(resolution.district)
-        matched = [
-            station
-            for station in province_stations
-            if normalize_tr(station.district) == normalized_district
-        ]
-        return matched or None
+        district_match = match_district(
+            resolution.district, province_stations
+        )
+        if district_match is None:
+            return None
+        return district_match.stations, district_match.note
 
     rated = [
         station
@@ -448,21 +471,20 @@ def _select_history_stations(
         return None
     return [
         max(rated, key=lambda station: station.current.aqi_index)
-    ]
+    ], None
 
 
 def _select_alert_stations(
     resolution, province_stations: list[Station], value_getter
-) -> list[Station] | None:
+) -> tuple[list[Station], str | None] | None:
     """Select district matches or the province's highest metric station."""
     if resolution.district:
-        normalized_district = normalize_tr(resolution.district)
-        matched = [
-            station
-            for station in province_stations
-            if normalize_tr(station.district) == normalized_district
-        ]
-        return matched or None
+        district_match = match_district(
+            resolution.district, province_stations
+        )
+        if district_match is None:
+            return None
+        return district_match.stations, district_match.note
 
     rated = [
         station
@@ -473,7 +495,7 @@ def _select_alert_stations(
         return None
     return [
         max(rated, key=lambda station: value_getter(station.current))
-    ]
+    ], None
 
 
 @mcp.tool
@@ -484,6 +506,12 @@ async def get_historical_data(
 
     days 1 ile 90 arasında olmalıdır. İlçe verilmezse ilin güncel en
     kötü istasyonu, ilçe verilirse eşleşen tüm istasyonlar kullanılır.
+
+    days büyüdükçe yanıt süresi de uzar: geçmiş veri sabit ~3 günlük
+    sayfalar halinde, sayfalar arası 1 saniye beklemeyle çekiliyor
+    (örn. days=87 tek istasyon için ~36 saniye sürer). İlçede birden
+    fazla istasyon varsa süreler istasyon başına toplanır. Hızlı bir
+    yanıt gerekiyorsa küçük bir days değeri (örn. 7-14) tercih edin.
     """
     try:
         validate_history_days(days)
@@ -521,10 +549,10 @@ async def get_historical_data(
             stale_warning,
         )
 
-    target_stations = _select_history_stations(
+    selection = _select_history_stations(
         resolution, province_stations
     )
-    if target_stations is None:
+    if selection is None:
         if resolution.district:
             return _attach_staleness_warning(
                 district_error_payload(
@@ -550,6 +578,12 @@ async def get_historical_data(
             stale_warning,
         )
 
+    target_stations, district_note = selection
+    combined_note = (
+        f"{resolution.note} {district_note}".strip()
+        if resolution.note and district_note
+        else district_note or resolution.note
+    )
     throttle = SequentialThrottle()
     station_payloads = []
     for station in target_stations:
@@ -570,7 +604,7 @@ async def get_historical_data(
     return _attach_staleness_warning(
         {
             "il": resolution.province,
-            "not": resolution.note,
+            "not": combined_note,
             "gun_sayisi": days,
             "istasyonlar": station_payloads,
         },
@@ -585,7 +619,10 @@ async def get_trend_summary(
     """Hava kalitesinin 3 veya 6 günlük kural tabanlı trendini döndürür.
 
     İlçe verilmezse ilin güncel en kötü istasyonu, ilçe verilirse eşleşen
-    tüm istasyonlar ayrı ayrı değerlendirilir.
+    tüm istasyonlar ayrı ayrı değerlendirilir. yon alanı 'iyilesiyor',
+    'kotulesiyor', 'stabil' değerlerinin yanı sıra 'yetersiz_veri' de
+    olabilir — bu, pencerenin ilk veya ikinci yarısında hiç ölçüm
+    bulunmadığı, dolayısıyla bir trend hesaplanamadığı anlamına gelir.
     """
     try:
         validate_trend_days(days)
@@ -623,10 +660,10 @@ async def get_trend_summary(
             stale_warning,
         )
 
-    target_stations = _select_history_stations(
+    selection = _select_history_stations(
         resolution, province_stations
     )
-    if target_stations is None:
+    if selection is None:
         if resolution.district:
             return _attach_staleness_warning(
                 district_error_payload(
@@ -652,6 +689,12 @@ async def get_trend_summary(
             stale_warning,
         )
 
+    target_stations, district_note = selection
+    combined_note = (
+        f"{resolution.note} {district_note}".strip()
+        if resolution.note and district_note
+        else district_note or resolution.note
+    )
     throttle = SequentialThrottle()
     trend_payloads = []
     for station in target_stations:
@@ -672,7 +715,7 @@ async def get_trend_summary(
     return _attach_staleness_warning(
         {
             "il": resolution.province,
-            "not": resolution.note,
+            "not": combined_note,
             "istasyonlar": trend_payloads,
         },
         stale_warning,
@@ -707,11 +750,17 @@ async def compare_cities(province1: str, province2: str) -> dict:
             stale_warning,
         )
 
-    stations1 = stations_in_province(resolution1.province, stations)
-    stations2 = stations_in_province(resolution2.province, stations)
-    if not stations1 or not stations2:
+    province_stations1 = stations_in_province(
+        resolution1.province, stations
+    )
+    province_stations2 = stations_in_province(
+        resolution2.province, stations
+    )
+    if not province_stations1 or not province_stations2:
         empty_province = (
-            resolution1.province if not stations1 else resolution2.province
+            resolution1.province
+            if not province_stations1
+            else resolution2.province
         )
         return _attach_staleness_warning(
             {
@@ -722,6 +771,42 @@ async def compare_cities(province1: str, province2: str) -> dict:
             },
             stale_warning,
         )
+
+    stations1 = province_stations1
+    if resolution1.district:
+        normalized_district1 = normalize_tr(resolution1.district)
+        stations1 = [
+            station
+            for station in province_stations1
+            if normalize_tr(station.district) == normalized_district1
+        ]
+        if not stations1:
+            return _attach_staleness_warning(
+                district_error_payload(
+                    resolution1.province,
+                    resolution1.district,
+                    province_stations1,
+                ),
+                stale_warning,
+            )
+
+    stations2 = province_stations2
+    if resolution2.district:
+        normalized_district2 = normalize_tr(resolution2.district)
+        stations2 = [
+            station
+            for station in province_stations2
+            if normalize_tr(station.district) == normalized_district2
+        ]
+        if not stations2:
+            return _attach_staleness_warning(
+                district_error_payload(
+                    resolution2.province,
+                    resolution2.district,
+                    province_stations2,
+                ),
+                stale_warning,
+            )
 
     rated1 = [
         station
@@ -969,10 +1054,10 @@ async def check_alert(
             stale_warning,
         )
 
-    target_stations = _select_alert_stations(
+    selection = _select_alert_stations(
         resolution, province_stations, value_getter
     )
-    if target_stations is None:
+    if selection is None:
         if resolution.district:
             return _attach_staleness_warning(
                 district_error_payload(
@@ -995,6 +1080,12 @@ async def check_alert(
             stale_warning,
         )
 
+    target_stations, district_note = selection
+    combined_note = (
+        f"{resolution.note} {district_note}".strip()
+        if resolution.note and district_note
+        else district_note or resolution.note
+    )
     rows = []
     exceeded_any = False
     for station in target_stations:
@@ -1018,7 +1109,7 @@ async def check_alert(
     return _attach_staleness_warning(
         {
             "il": resolution.province,
-            "not": resolution.note,
+            "not": combined_note,
             "kirletici": canonical_pollutant,
             "esik": threshold,
             "esik_asildi": exceeded_any,

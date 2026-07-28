@@ -5,6 +5,7 @@ from airquality_tr_mcp.normalization import (
     NoMatchError,
     fuzzy_best_match,
     normalize_tr,
+    partial_ratio_scorer,
 )
 
 
@@ -66,3 +67,27 @@ def test_fuzzy_best_match_ignores_duplicate_candidates():
         ["Batman - 2", "Batman - 2"],
     )
     assert match.value == "Batman - 2"
+
+
+def test_fuzzy_best_match_default_scorer_still_rejects_prefix_abbreviation():
+    with pytest.raises(NoMatchError) as exc_info:
+        fuzzy_best_match(normalize_tr("Afyon"), ["Afyonkarahisar", "Ankara"])
+    assert exc_info.value.query == normalize_tr("Afyon")
+
+
+def test_fuzzy_best_match_partial_scorer_accepts_prefix_abbreviation():
+    match = fuzzy_best_match(
+        normalize_tr("Afyon"),
+        ["Afyonkarahisar", "Ankara"],
+        scorer=partial_ratio_scorer,
+    )
+    assert match.value == "Afyonkarahisar"
+
+
+def test_fuzzy_best_match_partial_scorer_accepts_suffix_abbreviation():
+    match = fuzzy_best_match(
+        normalize_tr("Urfa"),
+        ["Şanlıurfa", "Bursa", "Uşak"],
+        scorer=partial_ratio_scorer,
+    )
+    assert match.value == "Şanlıurfa"

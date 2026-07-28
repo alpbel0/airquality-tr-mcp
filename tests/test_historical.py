@@ -275,7 +275,7 @@ def test_compute_trend_detects_worsening():
         _reading(hours, now, aqi=10.0) for hours in range(36, 72)
     ] + [_reading(hours, now, aqi=30.0) for hours in range(0, 36)]
 
-    result = compute_trend(readings, 3)
+    result = compute_trend(readings, 3, now=now)
 
     assert result.direction == "kotulesiyor"
     assert result.window_days == 3
@@ -292,7 +292,7 @@ def test_compute_trend_detects_improving():
         _reading(hours, now, aqi=30.0) for hours in range(36, 72)
     ] + [_reading(hours, now, aqi=10.0) for hours in range(0, 36)]
 
-    result = compute_trend(readings, 3)
+    result = compute_trend(readings, 3, now=now)
 
     assert result.direction == "iyilesiyor"
 
@@ -305,20 +305,57 @@ def test_compute_trend_detects_stable_within_threshold():
         _reading(hours, now, aqi=20.0) for hours in range(36, 72)
     ] + [_reading(hours, now, aqi=23.0) for hours in range(0, 36)]
 
-    result = compute_trend(readings, 3)
+    result = compute_trend(readings, 3, now=now)
 
     assert result.direction == "stabil"
 
 
-def test_compute_trend_returns_stable_with_none_averages_when_insufficient_data():
+def test_compute_trend_returns_yetersiz_veri_when_a_half_is_empty():
     from airquality_tr_mcp.historical import compute_trend
 
     now = datetime(2026, 7, 27, 12, 0, 0, tzinfo=ISTANBUL_TZ)
     readings = [_reading(0, now, aqi=None)]
 
-    result = compute_trend(readings, 3)
+    result = compute_trend(readings, 3, now=now)
 
-    assert result.direction == "stabil"
+    assert result.direction == "yetersiz_veri"
     assert result.first_half_avg is None
     assert result.second_half_avg is None
     assert result.difference is None
+
+
+def test_compute_trend_returns_yetersiz_veri_for_data_clustered_in_one_corner():
+    from airquality_tr_mcp.historical import compute_trend
+
+    now = datetime(2026, 7, 27, 12, 0, 0, tzinfo=ISTANBUL_TZ)
+    # All 20 readings fall within a ~2-hour span, 68-70 hours before `now`,
+    # deep in the first half of a 3-day (72h) window. Nothing represents
+    # the other ~70 hours of the window at all.
+    readings = [_reading(70, now, aqi=20.0)] + [
+        _reading(70 - i * 0.1, now, aqi=90.0) for i in range(1, 20)
+    ]
+
+    result = compute_trend(readings, 3, now=now)
+
+    assert result.direction == "yetersiz_veri"
+    assert result.first_half_avg is None
+    assert result.second_half_avg is None
+
+
+def test_compute_trend_assigns_exact_midpoint_reading_to_first_half():
+    from airquality_tr_mcp.historical import compute_trend
+
+    now = datetime(2026, 7, 27, 12, 0, 0, tzinfo=ISTANBUL_TZ)
+    # window_days=3 -> midpoint is exactly 36 hours before `now`.
+    readings = [
+        _reading(72, now, aqi=10.0),  # first half (well before midpoint)
+        _reading(36, now, aqi=50.0),  # exactly at the midpoint
+        _reading(0, now, aqi=10.0),  # second half (well after midpoint)
+    ]
+
+    result = compute_trend(readings, 3, now=now)
+
+    # The midpoint reading (50.0) must land in first_half, averaging with
+    # the 10.0 reading to 30.0 - not in second_half.
+    assert result.first_half_avg == 30.0
+    assert result.second_half_avg == 10.0

@@ -6,8 +6,10 @@ from airquality_tr_mcp.normalization import (
     NoMatchError,
 )
 from airquality_tr_mcp.provinces import (
+    DistrictMatch,
     ProvinceResolution,
     load_provinces,
+    match_district,
     resolve_province_input,
     stations_in_province,
 )
@@ -127,3 +129,73 @@ def test_stations_in_province_filters_by_city():
         stations_in_province("İstanbul", stations) == ISTANBUL_STATIONS
     )
     assert stations_in_province("Sivas", stations) == []
+
+
+def test_resolve_province_input_accepts_common_abbreviation_urfa():
+    result = resolve_province_input("Urfa", None, [])
+    assert result.province == "Şanlıurfa"
+    assert result.note is not None
+    assert "bulunamadı" in result.note
+
+
+def test_resolve_province_input_accepts_common_abbreviation_maras():
+    result = resolve_province_input("Maras", None, [])
+    assert result.province == "Kahramanmaraş"
+
+
+def test_resolve_province_input_accepts_typo_with_extra_letter():
+    result = resolve_province_input("Ursa", None, [])
+    assert result.province == "Bursa"
+
+
+def test_resolve_province_input_flags_ambiguous_for_short_substring_query():
+    with pytest.raises(AmbiguousMatchError):
+        resolve_province_input("ur", None, [])
+
+
+def test_resolve_province_input_rejects_short_non_substring_query():
+    with pytest.raises(NoMatchError) as exc_info:
+        resolve_province_input("bkn", None, [])
+    assert exc_info.value.suggestions
+
+
+ISTANBUL_MULTI_DISTRICT_STATIONS = [
+    _station("İstanbul", "Kadıköy", "ist-kadikoy"),
+    _station("İstanbul", "Üsküdar", "ist-uskudar"),
+    _station("İstanbul", "Beşiktaş", "ist-besiktas"),
+]
+
+
+def test_match_district_returns_exact_match_without_note():
+    result = match_district("Kadıköy", ISTANBUL_MULTI_DISTRICT_STATIONS)
+    assert result == DistrictMatch(
+        stations=[ISTANBUL_MULTI_DISTRICT_STATIONS[0]],
+        matched_name="Kadıköy",
+        note=None,
+    )
+
+
+def test_match_district_is_case_and_diacritic_insensitive():
+    result = match_district("kadikoy", ISTANBUL_MULTI_DISTRICT_STATIONS)
+    assert result is not None
+    assert result.matched_name == "Kadıköy"
+    assert result.note is None
+
+
+def test_match_district_fuzzy_corrects_typo():
+    result = match_district("Kadikoyy", ISTANBUL_MULTI_DISTRICT_STATIONS)
+    assert result is not None
+    assert result.matched_name == "Kadıköy"
+    assert result.stations == [ISTANBUL_MULTI_DISTRICT_STATIONS[0]]
+    assert result.note is not None
+    assert "Kadıköy" in result.note
+
+
+def test_match_district_returns_none_when_nothing_matches():
+    result = match_district("Zzzzzz", ISTANBUL_MULTI_DISTRICT_STATIONS)
+    assert result is None
+
+
+def test_match_district_returns_none_for_wrong_citys_district():
+    result = match_district("Konak", ISTANBUL_MULTI_DISTRICT_STATIONS)
+    assert result is None
