@@ -2,10 +2,30 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from .aggregation import AqiSummary
 from .categories import category_for_status
+from .geocoding import (
+    AmbiguousLocationError,
+    GeocodingAuthError,
+    GeocodingError,
+    GeocodingRateLimitError,
+    GeocodingResponseError,
+    GeocodingServiceError,
+    GeocodingTimeoutError,
+    LocationNotFoundError,
+    MissingApiKeyError,
+)
+from .historical import DailySummary, InvalidDaysError, TrendResult
 from .models import ISTANBUL_TZ, POLLUTANT_UNIT, Station
 from .normalization import AmbiguousMatchError, NoMatchError
+from .pollutants import ALERT_POLLUTANTS, POLLUTANT_FIELDS
 from .provider import UpstreamError
+from .ranking import InvalidLimitError, InvalidModeError, ProvinceRank
+from .spatial import (
+    InvalidNearestInputError,
+    NearestStationsResult,
+    StationDistance,
+)
 
 STALE_DATA_WARNING_THRESHOLD = timedelta(hours=2)
 
@@ -70,16 +90,6 @@ def station_ref_with_category(
     return payload
 
 
-_POLLUTANT_FIELDS = {
-    "NO2": "no2",
-    "SO2": "so2",
-    "CO": "co",
-    "O3": "o3",
-    "PM10": "pm10",
-    "PM25": "pm25",
-}
-
-
 def _pollutant_reading(
     pollutant: str, attr: str, station: Station
 ) -> dict:
@@ -121,7 +131,7 @@ def station_detail_payload(
         "baskin_kirletici": reading.dominant_pollutant,
         "olcumler": {
             pollutant: _pollutant_reading(pollutant, attr, station)
-            for pollutant, attr in _POLLUTANT_FIELDS.items()
+            for pollutant, attr in POLLUTANT_FIELDS.items()
         },
         "not": None,
     }
@@ -193,4 +203,393 @@ def resolution_error_payload(
         "girdi": exc.query,
         "oneriler": exc.suggestions,
         "mesaj": f"'{exc.query}' bulunamadı.{suggestions_text}",
+    }
+
+
+def invalid_days_payload(exc: InvalidDaysError) -> dict:
+    if exc.allowed_values is not None:
+        choices = " veya ".join(
+            str(value) for value in exc.allowed_values
+        )
+        detail = f"days sadece {choices} olabilir"
+    else:
+        detail = (
+            f"days {exc.minimum} ile {exc.maximum} arasında olmalı"
+        )
+    return {
+        "hata": "gecersiz_days",
+        "girdi": exc.days,
+        "mesaj": f"{detail}, {exc.days} verildi.",
+    }
+
+
+def daily_summary_row(summary: DailySummary) -> dict:
+    return {
+        "tarih": summary.date,
+        "hki_min": summary.hki_min,
+        "hki_max": summary.hki_max,
+        "hki_ortalama": summary.hki_ortalama,
+        "baskin_kirletici": summary.baskin_kirletici,
+    }
+
+
+def station_history_payload(
+    station: Station, summaries: list[DailySummary]
+) -> dict:
+    return {
+        "ad": station.name,
+        "gunluk_ozet": [
+            daily_summary_row(summary) for summary in summaries
+        ],
+    }
+
+
+def trend_summary_payload(
+    station: Station, trend: TrendResult
+) -> dict:
+    return {
+        "istasyon": station.name,
+        "pencere_gun": trend.window_days,
+        "yon": trend.direction,
+        "ilk_yari_ortalama_hki": trend.first_half_avg,
+        "son_yari_ortalama_hki": trend.second_half_avg,
+        "fark": trend.difference,
+    }
+
+
+def compare_cities_payload(
+    resolution1,
+    worst1: Station,
+    best1: Station,
+    stations1: list[Station],
+    resolution2,
+    worst2: Station,
+    best2: Station,
+    stations2: list[Station],
+    common_pollutants: dict,
+) -> dict:
+    hki1 = worst1.current.aqi_index
+    hki2 = worst2.current.aqi_index
+    if hki1 < hki2:
+        difference_sentence = (
+            f"{resolution1.province}'nin hava kalitesi şu an "
+            f"{resolution2.province}'dan daha iyi "
+            f"(HKİ {hki1:.0f}'e karşı {hki2:.0f})."
+        )
+    elif hki1 > hki2:
+        difference_sentence = (
+            f"{resolution2.province}'nin hava kalitesi şu an "
+            f"{resolution1.province}'dan daha iyi "
+            f"(HKİ {hki2:.0f}'e karşı {hki1:.0f})."
+        )
+    else:
+        difference_sentence = (
+            f"{resolution1.province} ve {resolution2.province}'nin "
+            f"hava kalitesi şu an aynı seviyede (HKİ {hki1:.0f})."
+        )
+
+    return {
+        "il1": {
+            "il": resolution1.province,
+            "not": resolution1.note,
+            "temsili_hki": hki1,
+            "temsili_kategori": category_for_status(
+                worst1.current.aqi_status
+            ),
+            "en_kotu_istasyon": station_ref_with_category(worst1),
+            "en_iyi_istasyon": station_ref_with_category(best1),
+            "istasyon_sayisi": len(stations1),
+        },
+        "il2": {
+            "il": resolution2.province,
+            "not": resolution2.note,
+            "temsili_hki": hki2,
+            "temsili_kategori": category_for_status(
+                worst2.current.aqi_status
+            ),
+            "en_kotu_istasyon": station_ref_with_category(worst2),
+            "en_iyi_istasyon": station_ref_with_category(best2),
+            "istasyon_sayisi": len(stations2),
+        },
+        "ortak_kirleticiler": common_pollutants,
+        "fark_cumlesi": difference_sentence,
+    }
+
+
+def invalid_mode_payload(exc: InvalidModeError) -> dict:
+    return {
+        "hata": "gecersiz_mode",
+        "girdi": exc.mode,
+        "mesaj": (
+            f"mode sadece 'best' veya 'worst' olabilir, "
+            f"'{exc.mode}' verildi."
+        ),
+    }
+
+
+def invalid_limit_payload(exc: InvalidLimitError) -> dict:
+    return {
+        "hata": "gecersiz_limit",
+        "girdi": exc.limit,
+        "mesaj": (
+            f"limit 1 veya daha büyük bir tam sayı olmalı, "
+            f"{exc.limit} verildi."
+        ),
+    }
+
+
+def province_ranking_row(rank: ProvinceRank) -> dict:
+    station = rank.representative_station
+    return {
+        "il": rank.province,
+        "temsili_hki": station.current.aqi_index,
+        "temsili_kategori": category_for_status(
+            station.current.aqi_status
+        ),
+    }
+
+
+def station_ranking_row(
+    station: Station, *, now: datetime | None = None
+) -> dict:
+    now = now or datetime.now(ISTANBUL_TZ)
+    payload = {
+        "il": station.city,
+        "ilce": station.district,
+        "ad": station.name,
+        "hki": station.current.aqi_index,
+        "kategori": category_for_status(station.current.aqi_status),
+        "baskin_kirletici": station.current.dominant_pollutant,
+        "olcum_zamani": station.current.measured_at.isoformat(),
+    }
+    warning = _data_age_warning(station.current.measured_at, now)
+    if warning:
+        payload["veri_yasi_uyarisi"] = warning
+    return payload
+
+
+def air_quality_summary_payload(
+    summary: AqiSummary | None,
+    *,
+    scope_label: str | None = None,
+    now: datetime | None = None,
+) -> dict:
+    payload = {}
+    if scope_label is not None:
+        payload["ilce"] = scope_label
+
+    if summary is None:
+        payload.update(
+            {
+                "en_yuksek_hki": None,
+                "ortalama_hki": None,
+                "medyan_hki": None,
+                "en_dusuk_hki": None,
+                "gecerli_istasyon_sayisi": 0,
+                "en_kotu_istasyon": None,
+                "en_iyi_istasyon": None,
+                "uyari": (
+                    "Bu kapsamdaki hiçbir istasyonda şu an geçerli "
+                    "bir HKİ ölçümü yok."
+                ),
+            }
+        )
+        return payload
+
+    payload.update(
+        {
+            "en_yuksek_hki": summary.highest,
+            "ortalama_hki": summary.average,
+            "medyan_hki": summary.median,
+            "en_dusuk_hki": summary.lowest,
+            "gecerli_istasyon_sayisi": summary.valid_station_count,
+            "en_kotu_istasyon": station_ref_with_category(
+                summary.worst_station, now=now
+            ),
+            "en_iyi_istasyon": station_ref_with_category(
+                summary.best_station, now=now
+            ),
+        }
+    )
+    return payload
+
+
+def invalid_pollutant_payload(pollutant: str) -> dict:
+    return {
+        "hata": "gecersiz_kirletici",
+        "girdi": pollutant,
+        "mesaj": (
+            f"'{pollutant}' geçerli bir kirletici değil. Kullanılabilir "
+            f"değerler: {', '.join(ALERT_POLLUTANTS)}."
+        ),
+    }
+
+
+def nearest_station_row(
+    item: StationDistance, *, now: datetime | None = None
+) -> dict:
+    now = now or datetime.now(ISTANBUL_TZ)
+    station = item.station
+    row = {
+        "ad": station.name,
+        "il": station.city,
+        "ilce": station.district,
+        "hki": station.current.aqi_index,
+        "kategori": category_for_status(
+            station.current.aqi_status
+            if station.current.aqi_index is not None
+            else None
+        ),
+        "baskin_kirletici": station.current.dominant_pollutant,
+        "mesafe_km": round(item.distance_km, 1),
+        "olcum_zamani": station.current.measured_at.isoformat(),
+    }
+    warning = _data_age_warning(station.current.measured_at, now)
+    if warning:
+        row["veri_yasi_uyarisi"] = warning
+    return row
+
+
+def nearest_air_quality_payload(
+    *,
+    input_payload: dict,
+    location_payload: dict,
+    selection: NearestStationsResult,
+    max_distance_km: float,
+    now: datetime | None = None,
+) -> dict:
+    now = now or datetime.now(ISTANBUL_TZ)
+    reference_row = (
+        nearest_station_row(selection.reference, now=now)
+        if selection.reference is not None
+        else None
+    )
+    payload = {
+        "girdi": input_payload,
+        "cozumlenen_konum": location_payload,
+        "referans_hki": (
+            selection.reference.station.current.aqi_index
+            if selection.reference is not None
+            else None
+        ),
+        "referans_istasyon": reference_row,
+        "yakin_istasyonlar": [
+            nearest_station_row(item, now=now)
+            for item in selection.rated
+        ],
+        "verisi_olmayan_yakin_istasyonlar": [
+            nearest_station_row(item, now=now)
+            for item in selection.unrated_closer
+        ],
+        "verisiz_istasyon_sayisi": selection.unrated_count,
+        "max_mesafe_km": max_distance_km,
+        "aciklama": (
+            "Referans HKİ hesaplanmamıştır; en yakın geçerli "
+            "istasyonun resmi UHKİA değeridir."
+            if selection.reference is not None
+            else "Belirlenen mesafe ve 75 km referans sınırı içinde "
+            "geçerli HKİ ölçümü bulunan istasyon yoktur."
+        ),
+        "kaynaklar": {
+            "konum": (
+                "HeiGIT/Pelias"
+                if location_payload["konum_kaynagi"] == "heigit_pelias"
+                else "Kullanıcı koordinatı"
+            ),
+            "hava_kalitesi": "UHKİA",
+            "mesafe": "Yerel Haversine hesabı",
+        },
+    }
+    if selection.nearest_outside is not None:
+        payload["en_yakin_kapsama_disi_istasyon"] = nearest_station_row(
+            selection.nearest_outside, now=now
+        )
+    return payload
+
+
+def invalid_nearest_input_payload(
+    exc: InvalidNearestInputError,
+) -> dict:
+    return {
+        "hata": "gecersiz_parametre",
+        "alan": exc.field,
+        "girdi": exc.value,
+        "mesaj": str(exc),
+    }
+
+
+def geocoding_error_payload(exc: GeocodingError) -> dict:
+    if isinstance(exc, MissingApiKeyError):
+        return {
+            "hata": "api_anahtari_eksik",
+            "mesaj": (
+                "Metinle konum aramak için kişisel bir HeiGIT API "
+                "anahtarı gereklidir."
+            ),
+            "ortam_degiskeni": "ORS_API_KEY",
+            "cozum_adimlari": [
+                "https://account.heigit.org/ adresinde hesap oluşturun.",
+                "Bir API anahtarı oluşturup MCP yapılandırmasının env "
+                "alanına ORS_API_KEY olarak ekleyin.",
+                "MCP istemcisini tamamen yeniden başlatın.",
+            ],
+            "guvenlik_uyarisi": (
+                "API anahtarınızı sohbete, kaynak koduna veya GitHub'a "
+                "eklemeyin."
+            ),
+            "alternatif": (
+                "latitude ve longitude parametreleriyle API anahtarı "
+                "olmadan kullanabilirsiniz."
+            ),
+        }
+    if isinstance(exc, AmbiguousLocationError):
+        return {
+            "hata": "belirsiz_konum",
+            "girdi": exc.query,
+            "adaylar": [
+                {
+                    "etiket": item.label,
+                    "lat": item.latitude,
+                    "lon": item.longitude,
+                    "eslesme_tipi": item.match_type,
+                }
+                for item in exc.candidates[:3]
+            ],
+            "mesaj": (
+                "Birden fazla olası konum bulundu. İl veya ilçe "
+                "ekleyerek tekrar deneyin."
+            ),
+        }
+    mapping = {
+        LocationNotFoundError: (
+            "konum_bulunamadi",
+            "Girilen konum Türkiye içinde eşleştirilemedi.",
+        ),
+        GeocodingAuthError: (
+            "geocoding_yetkilendirme_hatasi",
+            "HeiGIT API anahtarı kabul edilmedi.",
+        ),
+        GeocodingRateLimitError: (
+            "geocoding_kota_asildi",
+            "HeiGIT API kullanım sınırı aşıldı; daha sonra tekrar deneyin.",
+        ),
+        GeocodingTimeoutError: (
+            "geocoding_zaman_asimi",
+            "Konum servisi zamanında yanıt vermedi.",
+        ),
+        GeocodingResponseError: (
+            "geocoding_servis_hatasi",
+            "Konum servisinin yanıtı işlenemedi.",
+        ),
+        GeocodingServiceError: (
+            "geocoding_servis_hatasi",
+            "Konum servisine şu anda ulaşılamıyor.",
+        ),
+    }
+    for error_type, (code, message) in mapping.items():
+        if isinstance(exc, error_type):
+            return {"hata": code, "mesaj": message}
+    return {
+        "hata": "geocoding_servis_hatasi",
+        "mesaj": "Konum çözümleme sırasında beklenmeyen bir hata oluştu.",
     }

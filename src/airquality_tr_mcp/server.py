@@ -7,7 +7,30 @@ import sys
 from fastmcp import FastMCP
 from fastmcp.server.lifespan import lifespan
 
+from .advisories import advisory_for_status
+from .aggregation import summarize_aqi
 from .cache import CachedProvider
+from .categories import category_for_status
+from .comparison import (
+    common_measured_pollutants,
+    province_worst_pollutant_value,
+)
+from .geocoding import (
+    CachedGeocoder,
+    Geocoder,
+    GeocodingError,
+    PeliasGeocoder,
+)
+from .historical import (
+    InvalidDaysError,
+    SequentialThrottle,
+    compute_trend,
+    daily_summaries,
+    fetch_station_window,
+    validate_history_days,
+    validate_trend_days,
+)
+from .models import POLLUTANT_UNIT, Station
 from .normalization import (
     AmbiguousMatchError,
     NoMatchError,
@@ -15,16 +38,42 @@ from .normalization import (
     normalize_tr,
 )
 from .provider import AirQualityProvider, UhkiaProvider, UpstreamError
+from .pollutants import POLLUTANT_FIELDS, resolve_pollutant
 from .provinces import resolve_province_input, stations_in_province
+from .ranking import (
+    InvalidLimitError,
+    InvalidModeError,
+    RankingCache,
+    rank_provinces,
+    rank_stations,
+    validate_ranking_args,
+)
 from .responses import (
+    air_quality_summary_payload,
+    compare_cities_payload,
     district_error_payload,
+    geocoding_error_payload,
+    invalid_days_payload,
+    invalid_limit_payload,
+    invalid_mode_payload,
+    invalid_nearest_input_payload,
+    invalid_pollutant_payload,
     missing_station_id_payload,
+    nearest_air_quality_payload,
+    province_ranking_row,
     resolution_error_payload,
     station_breakdown_row,
     station_detail_payload,
-    station_ref_with_category,
+    station_history_payload,
+    station_ranking_row,
     station_summary,
+    trend_summary_payload,
     upstream_error_payload,
+)
+from .spatial import (
+    InvalidNearestInputError,
+    select_nearest_stations,
+    validate_nearest_input,
 )
 
 logging.basicConfig(
@@ -34,6 +83,8 @@ logging.basicConfig(
 )
 
 provider: AirQualityProvider = CachedProvider(UhkiaProvider())
+geocoder: Geocoder = CachedGeocoder(PeliasGeocoder())
+_detailed_ranking_cache = RankingCache()
 STATION_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -55,11 +106,17 @@ def _attach_staleness_warning(
 
 @lifespan
 async def _provider_lifespan(_server):
-    active_provider = provider
+    active_resources = (provider, geocoder)
     yield
-    close = getattr(active_provider, "aclose", None)
-    if close is not None:
-        await close()
+    for resource in active_resources:
+        close = getattr(resource, "aclose", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Resource cleanup failed"
+                )
 
 
 mcp = FastMCP(
@@ -178,12 +235,8 @@ async def get_air_quality(
                 stale_warning,
             )
 
-    rated_stations = [
-        station
-        for station in province_stations
-        if station.current.aqi_index is not None
-    ]
-    if not rated_stations:
+    province_summary = summarize_aqi(province_stations)
+    if province_summary is None:
         return _attach_staleness_warning(
             {
                 "il": resolution.province,
@@ -200,29 +253,99 @@ async def get_air_quality(
             stale_warning,
         )
 
-    worst = max(
-        rated_stations, key=lambda station: station.current.aqi_index
-    )
-    best = min(
-        rated_stations, key=lambda station: station.current.aqi_index
+    payload = {
+        "il": resolution.province,
+        "not": resolution.note,
+        "il_ozeti": air_quality_summary_payload(province_summary),
+        "istasyonlar": [
+            station_breakdown_row(station)
+            for station in breakdown_source
+        ],
+    }
+    if resolution.district:
+        payload["ilce_ozeti"] = air_quality_summary_payload(
+            summarize_aqi(breakdown_source),
+            scope_label=resolution.district,
+        )
+    return _attach_staleness_warning(payload, stale_warning)
+
+
+@mcp.tool
+async def get_nearest_air_quality(
+    location: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    limit: int = 3,
+    max_distance_km: float = 75.0,
+) -> dict:
+    """Konuma en yakın resmi UHKİA istasyonlarının güncel verisini döndürür.
+
+    location kullanımı ORS_API_KEY gerektirir ve metni HeiGIT/Pelias'a
+    gönderir. latitude/longitude kullanımı geocoder çağırmaz. referans_hki
+    tahmin veya ortalama değil, en yakın geçerli istasyonun resmi HKİ'sidir.
+    """
+    try:
+        mode = validate_nearest_input(
+            location=location,
+            latitude=latitude,
+            longitude=longitude,
+            limit=limit,
+            max_distance_km=max_distance_km,
+        )
+    except InvalidNearestInputError as exc:
+        return invalid_nearest_input_payload(exc)
+
+    if mode == "text":
+        assert location is not None
+        try:
+            place = await geocoder.geocode(location.strip())
+        except GeocodingError as exc:
+            return geocoding_error_payload(exc)
+        resolved_latitude = place.latitude
+        resolved_longitude = place.longitude
+        input_payload = {"location": location}
+        location_payload = {
+            "etiket": place.label,
+            "lat": place.latitude,
+            "lon": place.longitude,
+            "eslesme_tipi": place.match_type,
+            "konum_kaynagi": "heigit_pelias",
+        }
+    else:
+        resolved_latitude = latitude
+        resolved_longitude = longitude
+        input_payload = {
+            "latitude": latitude,
+            "longitude": longitude,
+        }
+        location_payload = {
+            "lat": latitude,
+            "lon": longitude,
+            "konum_kaynagi": "kullanici_koordinati",
+        }
+
+    assert resolved_latitude is not None
+    assert resolved_longitude is not None
+
+    try:
+        stations = await provider.fetch_all_stations()
+    except UpstreamError as exc:
+        return upstream_error_payload(exc)
+    stale_warning = _pop_staleness_warning()
+    selection = select_nearest_stations(
+        stations,
+        latitude=resolved_latitude,
+        longitude=resolved_longitude,
+        limit=limit,
+        max_distance_km=max_distance_km,
     )
     return _attach_staleness_warning(
-        {
-            "il": resolution.province,
-            "not": resolution.note,
-            "il_ozeti": {
-                "temsili_hki": worst.current.aqi_index,
-                "temsili_kategori": station_ref_with_category(worst)[
-                    "kategori"
-                ],
-                "en_kotu_istasyon": station_ref_with_category(worst),
-                "en_iyi_istasyon": station_ref_with_category(best),
-            },
-            "istasyonlar": [
-                station_breakdown_row(station)
-                for station in breakdown_source
-            ],
-        },
+        nearest_air_quality_payload(
+            input_payload=input_payload,
+            location_payload=location_payload,
+            selection=selection,
+            max_distance_km=max_distance_km,
+        ),
         stale_warning,
     )
 
@@ -301,6 +424,608 @@ async def get_station_detail(station: str) -> dict:
         f"'{fuzzy.value}' için sonuçlar gösteriliyor."
     )
     return _attach_staleness_warning(payload, stale_warning)
+
+
+def _select_history_stations(
+    resolution, province_stations: list[Station]
+) -> list[Station] | None:
+    """Select all district matches or the province's worst rated station."""
+    if resolution.district:
+        normalized_district = normalize_tr(resolution.district)
+        matched = [
+            station
+            for station in province_stations
+            if normalize_tr(station.district) == normalized_district
+        ]
+        return matched or None
+
+    rated = [
+        station
+        for station in province_stations
+        if station.current.aqi_index is not None
+    ]
+    if not rated:
+        return None
+    return [
+        max(rated, key=lambda station: station.current.aqi_index)
+    ]
+
+
+def _select_alert_stations(
+    resolution, province_stations: list[Station], value_getter
+) -> list[Station] | None:
+    """Select district matches or the province's highest metric station."""
+    if resolution.district:
+        normalized_district = normalize_tr(resolution.district)
+        matched = [
+            station
+            for station in province_stations
+            if normalize_tr(station.district) == normalized_district
+        ]
+        return matched or None
+
+    rated = [
+        station
+        for station in province_stations
+        if value_getter(station.current) is not None
+    ]
+    if not rated:
+        return None
+    return [
+        max(rated, key=lambda station: value_getter(station.current))
+    ]
+
+
+@mcp.tool
+async def get_historical_data(
+    province: str, days: int, district: str | None = None
+) -> dict:
+    """Geçmiş hava kalitesini istasyon bazında günlük HKİ özetiyle döndürür.
+
+    days 1 ile 90 arasında olmalıdır. İlçe verilmezse ilin güncel en
+    kötü istasyonu, ilçe verilirse eşleşen tüm istasyonlar kullanılır.
+    """
+    try:
+        validate_history_days(days)
+    except InvalidDaysError as exc:
+        return invalid_days_payload(exc)
+
+    try:
+        stations = await provider.fetch_all_stations()
+    except UpstreamError as exc:
+        return upstream_error_payload(exc)
+    stale_warning = _pop_staleness_warning()
+
+    try:
+        resolution = resolve_province_input(
+            province, district, stations
+        )
+    except (NoMatchError, AmbiguousMatchError) as exc:
+        return _attach_staleness_warning(
+            resolution_error_payload(exc), stale_warning
+        )
+
+    province_stations = stations_in_province(
+        resolution.province, stations
+    )
+    if not province_stations:
+        return _attach_staleness_warning(
+            {
+                "il": resolution.province,
+                "uyari": (
+                    f"'{resolution.province}' ilinde şu an aktif "
+                    "istasyon bulunmuyor."
+                ),
+                "not": resolution.note,
+            },
+            stale_warning,
+        )
+
+    target_stations = _select_history_stations(
+        resolution, province_stations
+    )
+    if target_stations is None:
+        if resolution.district:
+            return _attach_staleness_warning(
+                district_error_payload(
+                    resolution.province,
+                    resolution.district,
+                    province_stations,
+                ),
+                stale_warning,
+            )
+        return _attach_staleness_warning(
+            {
+                "il": resolution.province,
+                "not": resolution.note,
+                "uyari": (
+                    f"'{resolution.province}' ilindeki hiçbir istasyonda "
+                    "şu an geçerli bir HKİ ölçümü yok."
+                ),
+                "istasyonlar": [
+                    station_breakdown_row(station)
+                    for station in province_stations
+                ],
+            },
+            stale_warning,
+        )
+
+    throttle = SequentialThrottle()
+    station_payloads = []
+    for station in target_stations:
+        try:
+            readings = await fetch_station_window(
+                provider, station.id, days, throttle=throttle
+            )
+        except UpstreamError as exc:
+            return _attach_staleness_warning(
+                upstream_error_payload(exc), stale_warning
+            )
+        station_payloads.append(
+            station_history_payload(
+                station, daily_summaries(readings)
+            )
+        )
+
+    return _attach_staleness_warning(
+        {
+            "il": resolution.province,
+            "not": resolution.note,
+            "gun_sayisi": days,
+            "istasyonlar": station_payloads,
+        },
+        stale_warning,
+    )
+
+
+@mcp.tool
+async def get_trend_summary(
+    province: str, days: int = 3, district: str | None = None
+) -> dict:
+    """Hava kalitesinin 3 veya 6 günlük kural tabanlı trendini döndürür.
+
+    İlçe verilmezse ilin güncel en kötü istasyonu, ilçe verilirse eşleşen
+    tüm istasyonlar ayrı ayrı değerlendirilir.
+    """
+    try:
+        validate_trend_days(days)
+    except InvalidDaysError as exc:
+        return invalid_days_payload(exc)
+
+    try:
+        stations = await provider.fetch_all_stations()
+    except UpstreamError as exc:
+        return upstream_error_payload(exc)
+    stale_warning = _pop_staleness_warning()
+
+    try:
+        resolution = resolve_province_input(
+            province, district, stations
+        )
+    except (NoMatchError, AmbiguousMatchError) as exc:
+        return _attach_staleness_warning(
+            resolution_error_payload(exc), stale_warning
+        )
+
+    province_stations = stations_in_province(
+        resolution.province, stations
+    )
+    if not province_stations:
+        return _attach_staleness_warning(
+            {
+                "il": resolution.province,
+                "uyari": (
+                    f"'{resolution.province}' ilinde şu an aktif "
+                    "istasyon bulunmuyor."
+                ),
+                "not": resolution.note,
+            },
+            stale_warning,
+        )
+
+    target_stations = _select_history_stations(
+        resolution, province_stations
+    )
+    if target_stations is None:
+        if resolution.district:
+            return _attach_staleness_warning(
+                district_error_payload(
+                    resolution.province,
+                    resolution.district,
+                    province_stations,
+                ),
+                stale_warning,
+            )
+        return _attach_staleness_warning(
+            {
+                "il": resolution.province,
+                "not": resolution.note,
+                "uyari": (
+                    f"'{resolution.province}' ilindeki hiçbir istasyonda "
+                    "şu an geçerli bir HKİ ölçümü yok."
+                ),
+                "istasyonlar": [
+                    station_breakdown_row(station)
+                    for station in province_stations
+                ],
+            },
+            stale_warning,
+        )
+
+    throttle = SequentialThrottle()
+    trend_payloads = []
+    for station in target_stations:
+        try:
+            readings = await fetch_station_window(
+                provider, station.id, days, throttle=throttle
+            )
+        except UpstreamError as exc:
+            return _attach_staleness_warning(
+                upstream_error_payload(exc), stale_warning
+            )
+        trend_payloads.append(
+            trend_summary_payload(
+                station, compute_trend(readings, days)
+            )
+        )
+
+    return _attach_staleness_warning(
+        {
+            "il": resolution.province,
+            "not": resolution.note,
+            "istasyonlar": trend_payloads,
+        },
+        stale_warning,
+    )
+
+
+@mcp.tool
+async def compare_cities(province1: str, province2: str) -> dict:
+    """İki ilin hava kalitesi özetini yan yana karşılaştırır.
+
+    İstasyon bazlı döküm için get_air_quality kullanılmalıdır.
+    """
+    try:
+        stations = await provider.fetch_all_stations()
+    except UpstreamError as exc:
+        return upstream_error_payload(exc)
+    stale_warning = _pop_staleness_warning()
+
+    try:
+        resolution1 = resolve_province_input(province1, None, stations)
+    except (NoMatchError, AmbiguousMatchError) as exc:
+        return _attach_staleness_warning(
+            resolution_error_payload(exc, parameter_name="province1"),
+            stale_warning,
+        )
+
+    try:
+        resolution2 = resolve_province_input(province2, None, stations)
+    except (NoMatchError, AmbiguousMatchError) as exc:
+        return _attach_staleness_warning(
+            resolution_error_payload(exc, parameter_name="province2"),
+            stale_warning,
+        )
+
+    stations1 = stations_in_province(resolution1.province, stations)
+    stations2 = stations_in_province(resolution2.province, stations)
+    if not stations1 or not stations2:
+        empty_province = (
+            resolution1.province if not stations1 else resolution2.province
+        )
+        return _attach_staleness_warning(
+            {
+                "uyari": (
+                    f"'{empty_province}' ilinde şu an aktif istasyon "
+                    "bulunmuyor, karşılaştırma yapılamıyor."
+                )
+            },
+            stale_warning,
+        )
+
+    rated1 = [
+        station
+        for station in stations1
+        if station.current.aqi_index is not None
+    ]
+    rated2 = [
+        station
+        for station in stations2
+        if station.current.aqi_index is not None
+    ]
+    if not rated1 or not rated2:
+        empty_province = (
+            resolution1.province if not rated1 else resolution2.province
+        )
+        return _attach_staleness_warning(
+            {
+                "uyari": (
+                    f"'{empty_province}' ilindeki hiçbir istasyonda şu "
+                    "an geçerli bir HKİ ölçümü yok, karşılaştırma "
+                    "yapılamıyor."
+                )
+            },
+            stale_warning,
+        )
+
+    worst1 = max(rated1, key=lambda station: station.current.aqi_index)
+    best1 = min(rated1, key=lambda station: station.current.aqi_index)
+    worst2 = max(rated2, key=lambda station: station.current.aqi_index)
+    best2 = min(rated2, key=lambda station: station.current.aqi_index)
+    common_pollutants = {
+        pollutant: {
+            "il1_en_kotu": province_worst_pollutant_value(
+                pollutant, stations1
+            ),
+            "il2_en_kotu": province_worst_pollutant_value(
+                pollutant, stations2
+            ),
+            "birim": POLLUTANT_UNIT,
+        }
+        for pollutant in common_measured_pollutants(stations1, stations2)
+    }
+
+    return _attach_staleness_warning(
+        compare_cities_payload(
+            resolution1,
+            worst1,
+            best1,
+            stations1,
+            resolution2,
+            worst2,
+            best2,
+            stations2,
+            common_pollutants,
+        ),
+        stale_warning,
+    )
+
+
+@mcp.tool
+async def get_ranking(mode: str, limit: int) -> dict:
+    """İllerin hızlı sıralaması (il başına tek temsili değer).
+
+    Genel en kirli/en temiz iller soruları için bunu kullanın.
+    """
+    try:
+        validate_ranking_args(mode, limit)
+    except InvalidModeError as exc:
+        return invalid_mode_payload(exc)
+    except InvalidLimitError as exc:
+        return invalid_limit_payload(exc)
+
+    try:
+        stations = await provider.fetch_all_stations()
+    except UpstreamError as exc:
+        return upstream_error_payload(exc)
+    stale_warning = _pop_staleness_warning()
+    ranked = rank_provinces(stations, mode, limit)
+    return _attach_staleness_warning(
+        {
+            "mode": mode,
+            "siralama": [
+                province_ranking_row(rank) for rank in ranked
+            ],
+        },
+        stale_warning,
+    )
+
+
+@mcp.tool
+async def get_detailed_ranking(mode: str, limit: int) -> dict:
+    """İstasyon seviyesinde, il bazında özetlenmemiş derin sıralama."""
+    try:
+        validate_ranking_args(mode, limit)
+    except InvalidModeError as exc:
+        return invalid_mode_payload(exc)
+    except InvalidLimitError as exc:
+        return invalid_limit_payload(exc)
+
+    try:
+        stations = await provider.fetch_all_stations()
+    except UpstreamError as exc:
+        return upstream_error_payload(exc)
+    stale_warning = _pop_staleness_warning()
+
+    cache_key = (mode, limit)
+    ranked = _detailed_ranking_cache.get(cache_key)
+    if ranked is None:
+        ranked = rank_stations(stations, mode, limit)
+        _detailed_ranking_cache.set(cache_key, ranked)
+
+    return _attach_staleness_warning(
+        {
+            "mode": mode,
+            "siralama": [
+                station_ranking_row(station) for station in ranked
+            ],
+        },
+        stale_warning,
+    )
+
+
+@mcp.tool
+async def get_health_advisory(province: str) -> dict:
+    """İlin temsili hava kalitesine göre kural tabanlı tavsiye döndürür."""
+    try:
+        stations = await provider.fetch_all_stations()
+    except UpstreamError as exc:
+        return upstream_error_payload(exc)
+    stale_warning = _pop_staleness_warning()
+
+    try:
+        resolution = resolve_province_input(province, None, stations)
+    except (NoMatchError, AmbiguousMatchError) as exc:
+        return _attach_staleness_warning(
+            resolution_error_payload(exc), stale_warning
+        )
+
+    province_stations = stations_in_province(
+        resolution.province, stations
+    )
+    if not province_stations:
+        return _attach_staleness_warning(
+            {
+                "il": resolution.province,
+                "not": resolution.note,
+                "uyari": (
+                    f"'{resolution.province}' ilinde şu an aktif "
+                    "istasyon bulunmuyor."
+                ),
+            },
+            stale_warning,
+        )
+
+    rated_stations = [
+        station
+        for station in province_stations
+        if station.current.aqi_index is not None
+    ]
+    if not rated_stations:
+        return _attach_staleness_warning(
+            {
+                "il": resolution.province,
+                "not": resolution.note,
+                "uyari": (
+                    f"'{resolution.province}' ilindeki hiçbir "
+                    "istasyonda şu an geçerli bir HKİ ölçümü yok."
+                ),
+                "tavsiye": advisory_for_status(None),
+            },
+            stale_warning,
+        )
+
+    worst = max(
+        rated_stations, key=lambda station: station.current.aqi_index
+    )
+    return _attach_staleness_warning(
+        {
+            "il": resolution.province,
+            "not": resolution.note,
+            "temsili_hki": worst.current.aqi_index,
+            "temsili_kategori": category_for_status(
+                worst.current.aqi_status
+            ),
+            "tavsiye": advisory_for_status(worst.current.aqi_status),
+        },
+        stale_warning,
+    )
+
+
+@mcp.tool
+async def check_alert(
+    province: str,
+    threshold: float,
+    pollutant: str = "HKI",
+    district: str | None = None,
+) -> dict:
+    """Verilen hava kalitesi eşiğinin aşılıp aşılmadığını kontrol eder."""
+    canonical_pollutant = resolve_pollutant(pollutant)
+    if canonical_pollutant is None:
+        return invalid_pollutant_payload(pollutant)
+
+    if canonical_pollutant == "HKI":
+
+        def value_getter(reading):
+            return reading.aqi_index
+
+        unit = None
+    else:
+        field = POLLUTANT_FIELDS[canonical_pollutant]
+
+        def value_getter(reading, field=field):
+            return getattr(reading, field)
+
+        unit = POLLUTANT_UNIT
+
+    try:
+        stations = await provider.fetch_all_stations()
+    except UpstreamError as exc:
+        return upstream_error_payload(exc)
+    stale_warning = _pop_staleness_warning()
+
+    try:
+        resolution = resolve_province_input(
+            province, district, stations
+        )
+    except (NoMatchError, AmbiguousMatchError) as exc:
+        return _attach_staleness_warning(
+            resolution_error_payload(exc), stale_warning
+        )
+
+    province_stations = stations_in_province(
+        resolution.province, stations
+    )
+    if not province_stations:
+        return _attach_staleness_warning(
+            {
+                "il": resolution.province,
+                "not": resolution.note,
+                "uyari": (
+                    f"'{resolution.province}' ilinde şu an aktif "
+                    "istasyon bulunmuyor."
+                ),
+            },
+            stale_warning,
+        )
+
+    target_stations = _select_alert_stations(
+        resolution, province_stations, value_getter
+    )
+    if target_stations is None:
+        if resolution.district:
+            return _attach_staleness_warning(
+                district_error_payload(
+                    resolution.province,
+                    resolution.district,
+                    province_stations,
+                ),
+                stale_warning,
+            )
+        return _attach_staleness_warning(
+            {
+                "il": resolution.province,
+                "not": resolution.note,
+                "uyari": (
+                    f"'{resolution.province}' ilindeki hiçbir "
+                    f"istasyonda {canonical_pollutant} için şu an "
+                    "geçerli bir ölçüm yok."
+                ),
+            },
+            stale_warning,
+        )
+
+    rows = []
+    exceeded_any = False
+    for station in target_stations:
+        value = value_getter(station.current)
+        exceeded = value is not None and value > threshold
+        exceeded_any = exceeded_any or exceeded
+        row = {
+            "ad": station.name,
+            "il": station.city,
+            "ilce": station.district,
+            "deger": value,
+            "esik_asildi": exceeded,
+            "olcum_zamani": station.current.measured_at.isoformat(),
+        }
+        if value is None:
+            row["durum"] = "veri_yok"
+        if unit is not None:
+            row["birim"] = unit
+        rows.append(row)
+
+    return _attach_staleness_warning(
+        {
+            "il": resolution.province,
+            "not": resolution.note,
+            "kirletici": canonical_pollutant,
+            "esik": threshold,
+            "esik_asildi": exceeded_any,
+            "istasyonlar": rows,
+        },
+        stale_warning,
+    )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
 import asyncio
+from datetime import datetime
 
 import pytest
 
 from airquality_tr_mcp.cache import CachedProvider
+from airquality_tr_mcp.models import StationReading
 from airquality_tr_mcp.provider import UpstreamError
 
 
@@ -178,3 +180,47 @@ async def test_does_not_retry_upstream_within_ttl_window_after_a_failure():
     assert first_failure_result == ["a"]
     assert second_result == ["a"]
     assert inner.call_count == 2
+
+
+class _HistoryStubProvider:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, datetime | None]] = []
+
+    async def fetch_all_stations(self):
+        return []
+
+    async def fetch_station_history(self, station_id, end_date=None):
+        self.calls.append((station_id, end_date))
+        return [
+            StationReading.model_validate(
+                {
+                    "StationId": station_id,
+                    "Date": "2026-07-27T10:00:00",
+                    "NO2": None,
+                    "SO2": None,
+                    "CO": None,
+                    "O3": None,
+                    "PM10": None,
+                    "PM25": None,
+                    "CO_1": None,
+                    "O3_1": None,
+                    "PM10_1": None,
+                    "AQIIndex": None,
+                    "AQIStatus": None,
+                    "ContaminantParameter": None,
+                    "AQIType": None,
+                }
+            )
+        ]
+
+
+async def test_cached_provider_passes_through_station_history_uncached():
+    inner = _HistoryStubProvider()
+    cached = CachedProvider(inner)
+
+    first = await cached.fetch_station_history("abc")
+    second = await cached.fetch_station_history("abc")
+
+    assert len(first) == 1
+    assert len(second) == 1
+    assert len(inner.calls) == 2

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 import httpx
 
-from .models import Station
-from .parsing import parse_bulk_stations
+from .models import Station, StationReading
+from .parsing import parse_bulk_stations, parse_historical_readings
 
 BASE_URL = "https://sim.csb.gov.tr"
 COMMON_HEADERS = {
@@ -28,6 +29,10 @@ class UpstreamError(Exception):
 class AirQualityProvider(Protocol):
     async def fetch_all_stations(self) -> list[Station]: ...
 
+    async def fetch_station_history(
+        self, station_id: str, end_date: datetime | None = None
+    ) -> list[StationReading]: ...
+
 
 class UhkiaProvider:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
@@ -46,12 +51,14 @@ class UhkiaProvider:
             await self._client.aclose()
             self._client = None
 
-    async def fetch_all_stations(self) -> list[Station]:
+    async def _post(
+        self, path: str, *, params: dict | None, data: dict
+    ) -> str:
         try:
             response = await self._get_client().post(
-                "/Services/GetAirQualityStations",
-                params={"type": "0"},
-                data={"Location": "", "Date": ""},
+                path,
+                params=params,
+                data=data,
                 headers=COMMON_HEADERS,
             )
         except httpx.TimeoutException as exc:
@@ -69,8 +76,41 @@ class UhkiaProvider:
                 "UHKİA beklenmeyen bir yanıt döndürdü "
                 f"(status={response.status_code})."
             )
+        return response.text
+
+    async def fetch_all_stations(self) -> list[Station]:
+        text = await self._post(
+            "/Services/GetAirQualityStations",
+            params={"type": "0"},
+            data={"Location": "", "Date": ""},
+        )
         try:
-            return parse_bulk_stations(response.text)
+            return parse_bulk_stations(text)
+        except (ValueError, KeyError, TypeError, IndexError) as exc:
+            raise UpstreamError(
+                "UHKİA verisi işlenemedi (geçersiz yanıt formatı)."
+            ) from exc
+
+    async def fetch_station_history(
+        self, station_id: str, end_date: datetime | None = None
+    ) -> list[StationReading]:
+        if end_date is None:
+            text = await self._post(
+                "/Services/GetDetailData",
+                params=None,
+                data={"stationId": station_id},
+            )
+        else:
+            text = await self._post(
+                "/Services/GetAirQualityStationDetail",
+                params={"type": "0"},
+                data={
+                    "stationId": station_id,
+                    "endDate": end_date.strftime("%d.%m.%Y %H:%M:%S"),
+                },
+            )
+        try:
+            return parse_historical_readings(text)
         except (ValueError, KeyError, TypeError, IndexError) as exc:
             raise UpstreamError(
                 "UHKİA verisi işlenemedi (geçersiz yanıt formatı)."

@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
-from .models import Station
+from .models import Station, StationReading
 from .provider import AirQualityProvider, UpstreamError
 
 DEFAULT_TTL_SECONDS = 600.0
@@ -89,6 +90,11 @@ class CachedProvider:
             self._entry = _CacheEntry(stations=stations, fetched_at=now)
             self._staleness_warning = None
             return stations
+
+    async def fetch_station_history(
+        self, station_id: str, end_date: datetime | None = None
+    ) -> list[StationReading]:
+        return await self._inner.fetch_station_history(station_id, end_date)
 
     def pop_staleness_warning(self) -> str | None:
         warning = self._staleness_warning
