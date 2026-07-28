@@ -5,6 +5,8 @@ Türkiye'nin resmi Ulusal Hava Kalitesi İzleme Ağı (UHKİA) verisini bir MCP
 MCP-uyumlu bir asistan, Türkiye'deki 81 il ve 365+ istasyon için gerçek
 zamanlı ve geçmişe dönük hava kalitesi sorularını yanıtlayabilir.
 
+**Güncel kararlı sürüm:** `v1.0.0`
+
 **Bu, resmi olmayan (unofficial) bir entegrasyondur.** T.C. Çevre,
 Şehircilik ve İklim Değişikliği Bakanlığı ile bir bağlantısı yoktur ve
 onlar tarafından desteklenmemektedir. Kaynak portalın kullanım şartlarına
@@ -147,3 +149,7 @@ get_nearest_air_quality(latitude=37.2232, longitude=38.9224)
   soruluyorsa `get_air_quality`/`list_stations` tercih edilmelidir.
 - Nominatim/OpenStreetMap ve UHKİA birbirinden bağımsız, ilişkisiz iki dış
   servistir.
+
+## Lisans
+
+Bu proje [MIT Lisansı](LICENSE) ile lisanslanmıştır.

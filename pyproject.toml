@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "airquality-tr-mcp"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"
+description = "MCP server for Turkey's official UHKIA air quality data"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=3.4.4",
