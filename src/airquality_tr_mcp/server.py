@@ -1127,5 +1127,9 @@ async def check_alert(
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
     mcp.run(show_banner=False)
+
+
+if __name__ == "__main__":
+    main()

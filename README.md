@@ -32,7 +32,15 @@ uymak kullanıcının sorumluluğundadır.
 
 ## Kurulum
 
-Depoyu indirdikten veya klonladıktan sonra:
+PyPI üzerinden (önerilen):
+
+```bash
+pip install airquality-tr-mcp
+# veya
+uvx airquality-tr-mcp
+```
+
+Depoyu klonlayarak geliştirme amaçlı kurulum:
 
 ```bash
 cd airquality-tr-mcp
@@ -40,6 +48,21 @@ uv sync
 ```
 
 ## Claude Desktop / Codex yapılandırması (stdio)
+
+PyPI paketiyle kurulduysa:
+
+```json
+{
+  "mcpServers": {
+    "airquality-tr": {
+      "command": "uvx",
+      "args": ["airquality-tr-mcp"]
+    }
+  }
+}
+```
+
+Depodan klonlanmış geliştirme kurulumuyla:
 
 ```json
 {
