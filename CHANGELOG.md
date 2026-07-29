@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-07-29
+
+### Added
+
+- Standalone REST API (`airquality_tr_mcp.api`, `airquality-tr-api` console
+  script) exposing every MCP tool as an HTTP GET endpoint, built on FastAPI
+  and sharing the exact same business logic as the MCP tools via a new
+  `service.py` module.
+- HTTP status code mapping for error responses (400/404/409/429/502/504)
+  based on the existing structured `hata` error payloads.
+- Interactive API docs at `/docs` (FastAPI/Swagger UI).
+
 ## [1.0.0] - 2026-07-29
 
 ### Added

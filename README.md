@@ -5,7 +5,7 @@ Türkiye'nin resmi Ulusal Hava Kalitesi İzleme Ağı (UHKİA) verisini bir MCP
 MCP-uyumlu bir asistan, Türkiye'deki 81 il ve 365+ istasyon için gerçek
 zamanlı ve geçmişe dönük hava kalitesi sorularını yanıtlayabilir.
 
-**Güncel kararlı sürüm:** `v1.0.0`
+**Güncel kararlı sürüm:** `v1.1.0`
 
 **Bu, resmi olmayan (unofficial) bir entegrasyondur.** T.C. Çevre,
 Şehircilik ve İklim Değişikliği Bakanlığı ile bir bağlantısı yoktur ve
@@ -81,6 +81,25 @@ Depodan klonlanmış geliştirme kurulumuyla:
   }
 }
 ```
+
+## REST API olarak çalıştırma
+
+MCP sunucusuyla aynı iş mantığını kullanan bağımsız bir REST API de mevcuttur:
+
+```bash
+uv run airquality-tr-api
+# veya
+uv run uvicorn airquality_tr_mcp.api:app --reload
+```
+
+Varsayılan olarak `http://localhost:8000` üzerinde dinler. Etkileşimli
+dokümantasyon için `http://localhost:8000/docs` adresini ziyaret edin.
+Uç noktalar MCP tool'larıyla bire bir eşlenir (`/stations`,
+`/air-quality`, `/nearest-air-quality`, `/station`, `/historical-data`,
+`/trend-summary`, `/compare-cities`, `/ranking`, `/detailed-ranking`,
+`/health-advisory`, `/alert`) ve aynı Türkçe JSON gövdelerini döndürür;
+tek fark, hata durumlarında (`hata` alanı dolu yanıtlarda) uygun bir
+HTTP durum kodu (400/404/409/429/502/504) döndürülmesidir.
 
 ## Tool'lar
 

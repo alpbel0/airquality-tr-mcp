@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "airquality-tr-mcp"
-version = "1.0.0"
+version = "1.1.0"
 description = "MCP server for Turkey's official UHKIA air quality data"
 readme = "README.md"
 license = "MIT"
@@ -21,12 +21,14 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "fastapi>=0.115.0",
     "fastmcp>=3.4.4",
     "httpx>=0.28.1",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     "rapidfuzz>=3.14.5",
     "tzdata>=2026.3 ; sys_platform == 'win32'",
+    "uvicorn[standard]>=0.32.0",
 ]
 
 [project.urls]
@@ -36,6 +38,7 @@ Issues = "https://github.com/alpbel0/airquality-tr-mcp/issues"
 
 [project.scripts]
 airquality-tr-mcp = "airquality_tr_mcp.server:main"
+airquality-tr-api = "airquality_tr_mcp.api:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/airquality_tr_mcp"]

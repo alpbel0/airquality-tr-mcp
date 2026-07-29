@@ -1,5 +1,6 @@
 import statistics
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from airquality_tr_mcp.geocoding import (
     GeocodedPlace,
     GeocodingServiceError,
 )
-from airquality_tr_mcp.models import StationReading
+from airquality_tr_mcp.models import ISTANBUL_TZ, StationReading
 from airquality_tr_mcp.parsing import parse_bulk_stations
 from airquality_tr_mcp.provider import UpstreamError
 from airquality_tr_mcp.ranking import RankingCache
@@ -905,7 +906,9 @@ async def test_get_historical_data_returns_worst_station_when_no_district(
                 StationReading.model_validate(
                     {
                         "StationId": station_id,
-                        "Date": "2026-07-27T10:00:00",
+                        "Date": (
+                            datetime.now(ISTANBUL_TZ) - timedelta(minutes=1)
+                        ).isoformat(),
                         "NO2": None,
                         "SO2": None,
                         "CO": None,
